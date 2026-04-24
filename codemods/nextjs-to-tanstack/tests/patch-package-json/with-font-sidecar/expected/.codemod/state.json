@@ -1,0 +1,16 @@
+{
+  "fonts": [
+    {
+      "importSource": "next/font/google",
+      "family": "Inter",
+      "packageKey": "inter",
+      "variable": "--font-sans"
+    },
+    {
+      "importSource": "next/font/google",
+      "family": "DM_Sans",
+      "packageKey": "dm-sans",
+      "variable": null
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "my-app",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "start": "node .output/server/index.mjs",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-start": "latest",
+    "vite": "latest",
+    "@vitejs/plugin-react": "latest",
+    "nitro": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@tailwindcss/vite": "latest",
+    "tailwindcss": "latest"
+  }
+}

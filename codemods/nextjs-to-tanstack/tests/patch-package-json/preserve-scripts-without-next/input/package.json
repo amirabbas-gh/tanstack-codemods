@@ -1,0 +1,20 @@
+{
+  "name": "custom-scripts",
+  "type": "module",
+  "scripts": {
+    "dev": "node custom-dev.js",
+    "build": "tsc && vite build"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-start": "latest",
+    "vite": "latest",
+    "@vitejs/plugin-react": "latest",
+    "nitro": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "latest",
+    "tailwindcss": "latest"
+  }
+}

@@ -1,0 +1,10 @@
+@import 'tailwindcss';
+/* CODEMOD: review — verify package @fontsource-variable/inter exists on npm */
+@import "@fontsource-variable/inter";
+@theme inline {
+  --font-sans: 'Inter Variable', sans-serif;
+}
+
+body {
+  background: #fff;
+}

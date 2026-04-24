@@ -2,19 +2,22 @@ schema_version: "1.0"
 
 name: "@codemod/nextjs-to-tanstack"
 version: "1.0.0"
-description: "migrate a project from the Next.js App Router to TanStack"
+description: "Migrate a project from the Next.js App Router to TanStack Start"
 author: "Amirabbas Ghasemi <amirabbas08dev@gmail.com>"
 license: "MIT"
 workflow: "workflow.yaml"
 repository: "https://github.com/amirabbas-gh/tanstack-codemods/tree/main/codemods/nextjs-to-tanstack"
 
 targets:
-  languages: ["typescript"]
+  languages: ["tsx", "ts", "jsx", "js", "json", "css"]
 
-keywords: ["transformation", "migration"]
+keywords: ["nextjs", "tanstack", "migration", "app-router", "react", "transformation"]
 
 registry:
   access: "public"
   visibility: "public"
 
-capabilities: []
+capabilities:
+  - fs
+  - child_process
+

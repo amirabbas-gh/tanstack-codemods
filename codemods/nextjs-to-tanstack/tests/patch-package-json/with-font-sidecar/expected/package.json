@@ -1,0 +1,19 @@
+{
+  "name": "fontie",
+  "type": "module",
+  "scripts": {},
+  "dependencies": {
+    "react": "^19.0.0",
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-start": "latest",
+    "vite": "latest",
+    "@vitejs/plugin-react": "latest",
+    "nitro": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "latest",
+    "tailwindcss": "latest",
+    "@fontsource-variable/inter": "latest",
+    "@fontsource-variable/dm-sans": "latest"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "fonts": [
+    {
+      "importSource": "next/font/google",
+      "family": "Inter",
+      "packageKey": "inter",
+      "variable": "--font-sans"
+    }
+  ]
+}

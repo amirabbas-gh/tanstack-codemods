@@ -1,0 +1,9 @@
+{
+  "name": "fontie",
+  "type": "module",
+  "scripts": {},
+  "dependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {}
+}

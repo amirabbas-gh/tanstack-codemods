@@ -3,11 +3,177 @@
 version: "1"
 
 nodes:
-  - id: apply-transforms
-    name: Apply AST Transformations
+  - id: cleanup-obsolete-files
+    name: Delete Next.js config files
     type: automatic
     steps:
-      - name: "Scan typescript files and apply fixes"
+      - name: Remove next.config.* and postcss.config.*
         js-ast-grep:
-          js_file: scripts/codemod.ts
-          language: "typescript"
+          js_file: scripts/entries/cleanup-obsolete-files.ts
+          language: tsx
+          include:
+            - "next.config.js"
+            - "next.config.mjs"
+            - "next.config.cjs"
+            - "next.config.ts"
+            - "next.config.mts"
+            - "next.config.cts"
+            - "postcss.config.js"
+            - "postcss.config.mjs"
+            - "postcss.config.cjs"
+
+  - id: scaffold-tanstack-files
+    name: Create vite.config.ts and src/router.tsx
+    type: automatic
+    depends_on: [cleanup-obsolete-files]
+    steps:
+      - name: Write new config files (idempotent, skip if exist)
+        js-ast-grep:
+          js_file: scripts/entries/scaffold-tanstack-files.ts
+          language: json
+          include: ["package.json"]
+
+  # ---- Structural rewrites (file-shape-changing, ordered) ----
+
+  - id: rewrite-root-layout
+    name: R1 — Convert layout.tsx to __root.tsx
+    type: automatic
+    depends_on: [scaffold-tanstack-files]
+    steps:
+      - name: Structural rewrite + rename
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-root-layout.ts
+          language: tsx
+          include: ["src/app/layout.tsx", "src/app/layout.jsx"]
+
+  - id: rewrite-api-routes
+    name: R6 — Convert route.ts to createFileRoute handlers
+    type: automatic
+    depends_on: [rewrite-root-layout]
+    steps:
+      - name: Hoist HTTP handlers + rename
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-api-routes.ts
+          language: tsx
+          include: ["src/app/**/route.ts", "src/app/**/route.js"]
+
+  - id: rewrite-pages
+    name: R2 — Wrap page components in createFileRoute + rename
+    type: automatic
+    depends_on: [rewrite-api-routes]
+    steps:
+      - name: Structural rewrite + rename
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-pages.ts
+          language: tsx
+          include: ["src/app/**/page.tsx", "src/app/**/page.jsx"]
+
+  # ---- Post-structure rewrites (operate on already-renamed files) ----
+
+  - id: rewrite-dynamic-params
+    name: R3 — Rewrite params / searchParams to Route hooks
+    type: automatic
+    depends_on: [rewrite-pages]
+    steps:
+      - name: Replace await params with Route.useParams / Route.useSearch
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-dynamic-params.ts
+          language: tsx
+          include: ["src/app/**/*.tsx", "src/app/**/*.jsx"]
+          exclude: ["src/app/__root.tsx"]
+
+  - id: rewrite-metadata
+    name: R7 — Convert `export const metadata` to head() config
+    type: automatic
+    depends_on: [rewrite-dynamic-params]
+    steps:
+      - name: Map metadata fields to head() entries
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-metadata.ts
+          language: tsx
+          include: ["src/app/__root.tsx", "src/app/**/*.tsx"]
+
+  - id: annotate-async-pages
+    name: R10 — Leave TODO on async Page components
+    type: automatic
+    depends_on: [rewrite-metadata]
+    steps:
+      - name: Insert Tier-2 TODO (no code rewrite)
+        js-ast-grep:
+          js_file: scripts/entries/annotate-async-pages.ts
+          language: tsx
+          include: ["src/app/**/*.tsx", "src/app/**/*.jsx"]
+
+  # ---- Cross-cutting rewrites (operate anywhere under src/) ----
+
+  - id: rewrite-fonts
+    name: R9 — Strip next/font and record font names for later steps
+    type: automatic
+    depends_on: [annotate-async-pages]
+    steps:
+      - name: Remove imports + className refs + write .codemod/state.json
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-fonts.ts
+          language: tsx
+          include: ["src/**/*.tsx", "src/**/*.jsx", "src/**/*.ts", "src/**/*.js"]
+
+  - id: rewrite-server-fns
+    name: R8 — Wrap "use server" exports in createServerFn
+    type: automatic
+    depends_on: [rewrite-fonts]
+    steps:
+      - name: Replace "use server" directive
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-server-fns.ts
+          language: tsx
+          semantic_analysis: workspace
+          include: ["src/**/*.ts", "src/**/*.tsx"]
+
+  - id: rewrite-link-image
+    name: R4 + R5 — Swap next/link and next/image to TanStack / unpic
+    type: automatic
+    depends_on: [rewrite-server-fns]
+    steps:
+      - name: Replace imports + JSX attributes
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-link-image.ts
+          language: tsx
+          semantic_analysis: workspace
+          include: ["src/**/*.tsx", "src/**/*.jsx"]
+
+  # ---- Companion-file patches (read sidecar state) ----
+
+  - id: patch-globals-css
+    name: R12 — Inject @fontsource and @theme blocks
+    type: automatic
+    depends_on: [rewrite-link-image]
+    steps:
+      - name: Add font imports to globals.css
+        js-ast-grep:
+          js_file: scripts/entries/patch-globals-css.ts
+          language: css
+          include: ["src/app/globals.css", "src/styles/globals.css"]
+
+  - id: patch-package-json
+    name: R11 — Update dependencies and scripts
+    type: automatic
+    depends_on: [patch-globals-css]
+    steps:
+      - name: Add TanStack deps, remove Next, add @fontsource-variable/*
+        js-ast-grep:
+          js_file: scripts/entries/patch-package-json.ts
+          language: json
+          include: ["package.json"]
+
+  # ---- Finalisation ----
+
+  - id: finalize-cleanup
+    name: Remove codemod sidecar state
+    type: automatic
+    depends_on: [patch-package-json]
+    steps:
+      - name: Drop .codemod/state.json
+        js-ast-grep:
+          js_file: scripts/entries/finalize-cleanup.ts
+          language: json
+          include: ["package.json"]
