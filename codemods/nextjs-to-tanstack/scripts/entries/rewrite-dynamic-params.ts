@@ -51,6 +51,17 @@ const codemod: Codemod<TSX> = async (root) => {
   if (paramKind.has("params")) awaitKind.set("params", "params");
   if (paramKind.has("searchParams")) awaitKind.set("searchParams", "searchParams");
 
+  // Orphaned `await params` / `await searchParams` inside the route component body
+  // after the formal params were stripped (or when awaits appear only nested in calls
+  // / spreads). Without this pass, `$slug.tsx`-style pages keep `await params` with no
+  // binding and TypeScript collapses entirely.
+  for (const name of PARAMS_NAMES) {
+    if (awaitKind.has(name)) continue;
+    if (countAwaitsOf(pageFn, name) > 0) {
+      awaitKind.set(name, name === "searchParams" ? "searchParams" : "params");
+    }
+  }
+
   const isCatchAll = /\/\$\.tsx?$/.test(relative);
 
   let removedAwaits = 0;
@@ -233,6 +244,7 @@ function rewriteAwaitStatements(
   rootNode: SgNode<TSX>,
 ): Edit[] {
   const edits: Edit[] = [];
+  const handledDeclaratorAwaitIds = new Set<number>();
 
   // Match: `const { ... } = await <varName>;`
   const declarations = fn.findAll({
@@ -275,6 +287,7 @@ function rewriteAwaitStatements(
       }
     }
     edits.push(value.replace(hookName));
+    handledDeclaratorAwaitIds.add(value.id());
   }
   void rootNode;
 
@@ -304,6 +317,22 @@ function rewriteAwaitStatements(
     const value = decl.field("value");
     if (!value) continue;
     edits.push(value.replace(hookName));
+    handledDeclaratorAwaitIds.add(value.id());
+  }
+
+  // Nested / argument-position awaits: `foo(await params)`, spreads, chains, …
+  const bareAwaits = fn.findAll({
+    rule: {
+      kind: "await_expression",
+      has: {
+        kind: "identifier",
+        regex: `^${varName}$`,
+      },
+    },
+  });
+  for (const aw of bareAwaits) {
+    if (handledDeclaratorAwaitIds.has(aw.id())) continue;
+    edits.push(aw.replace(hookName));
   }
 
   return edits;
