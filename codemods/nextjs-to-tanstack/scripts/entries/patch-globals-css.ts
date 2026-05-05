@@ -8,14 +8,14 @@
  * CSS is line-oriented — we detect existing `@import "@fontsource-variable/…"`
  * statements and skip them, then append whatever is missing at the top of the
  * file (after any pre-existing `@import` line). A Tailwind `@theme inline`
- * block with `--font-<variable>: '<Family>', sans-serif;` is appended too when
- * the sidecar records variable font metadata.
+ * A Tailwind `@theme inline` block is appended for **Google** fonts only.
+ * `next/font/local` is skipped (no npm package; use `@font-face` yourself).
  */
 
 import type { Codemod, Edit } from "codemod:ast-grep";
 import type CSS from "codemod:ast-grep/langs/css";
 import { getFilename, inferCodemodTargetDir } from "../utils/paths.ts";
-import { readSidecar, type FontEntry } from "../utils/sidecar.ts";
+import { readSidecar, type FontEntry, hasFontsourcePackage } from "../utils/sidecar.ts";
 
 const codemod: Codemod<CSS> = async (root) => {
   const file = getFilename(root);
@@ -26,12 +26,13 @@ const codemod: Codemod<CSS> = async (root) => {
 
   const targetDir = inferCodemodTargetDir(file);
   const sidecar = readSidecar(targetDir);
-  if (sidecar.fonts.length === 0) return null;
+  const googleFonts = sidecar.fonts.filter(hasFontsourcePackage);
+  if (googleFonts.length === 0) return null;
 
   const edits: Edit[] = [];
 
-  const importBlock = buildImportBlock(source, sidecar.fonts);
-  const themeBlock = buildThemeBlock(source, sidecar.fonts);
+  const importBlock = buildImportBlock(source, googleFonts);
+  const themeBlock = buildThemeBlock(source, googleFonts);
 
   // Anchor the injection point: right after the last existing `@import` line,
   // or at file start otherwise.

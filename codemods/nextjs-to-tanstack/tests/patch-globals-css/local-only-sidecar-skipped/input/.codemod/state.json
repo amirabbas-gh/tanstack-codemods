@@ -1,0 +1,10 @@
+{
+  "fonts": [
+    {
+      "importSource": "next/font/local",
+      "family": "geistMono",
+      "packageKey": "geist-mono",
+      "variable": "--font-mono"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "fonts": [
+    {
+      "importSource": "next/font/local",
+      "family": "calSans",
+      "packageKey": "cal-sans",
+      "variable": "--font-cal"
+    }
+  ]
+}

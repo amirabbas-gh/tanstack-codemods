@@ -1,0 +1,9 @@
+{
+  "name": "app",
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "@tanstack/react-start": "latest",
+    "react": "^19.0.0"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "esnext"],
+    "plugins": [{ "name": "next" }]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "ensure-root-fixture",
+  "dependencies": {
+    "react": "^19.0.0"
+  }
+}

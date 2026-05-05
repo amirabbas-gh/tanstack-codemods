@@ -1,8 +1,9 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/codemod/codemod/refs/heads/main/schemas/workflow.json
 #
-# Globs MUST work when `-t <monorepo-root>` points at the workspace root — e.g.
-# Cal.com `apps/web/app/...` is NOT matched by `app/**` relative to repo root,
-# only by `**/app/**` (parity with next2tanstack `**/*.{ts,tsx}` coverage).
+# Globs MUST work when `-t <repo-or-package-root>` points anywhere sensible: use
+# `**/app/**` / `**/pages/**` (not bare `app/**`) so nested trees like `apps/foo/app/...`
+# or `apps/foo/pages/...` match.
+# In huge monorepos, pass `-t` to the Next.js package you are migrating to limit scope.
 #
 version: "1"
 
@@ -14,6 +15,23 @@ x-shared-excludes: &shared-excludes
   - "**/coverage/**"
   - "**/.git/**"
   - "**/.*/**"
+  - "**/*.d.ts"
+
+# Cross-cutting transforms: any `.ts`/`.tsx`/`.js`/`.jsx` under the workflow target (`-t`).
+# Use `-t <package-root>` in monorepos to avoid scanning the whole repo.
+x-cross-cutting-ts: &cross-cutting-ts
+  - "**/*.tsx"
+  - "**/*.jsx"
+  - "**/*.ts"
+  - "**/*.js"
+
+x-cross-cutting-tsx: &cross-cutting-tsx
+  - "**/*.tsx"
+  - "**/*.jsx"
+
+x-cross-cutting-server-fn: &cross-cutting-server-fn
+  - "**/*.ts"
+  - "**/*.tsx"
 
 nodes:
   - id: cleanup-obsolete-files
@@ -41,6 +59,8 @@ nodes:
     type: automatic
     depends_on: [cleanup-obsolete-files]
     steps:
+      # When `next-i18next.config.*` / Next `i18n` is present, also writes `.codemod/i18n.json`
+      # and later steps emit `src/app/{-$locale}/…` + `createFileRoute("/{-$locale}/…")` per TanStack i18n docs.
       - name: Write new config files (idempotent, skip if exist)
         js-ast-grep:
           js_file: scripts/entries/scaffold-tanstack-files.ts
@@ -52,7 +72,7 @@ nodes:
   # ---- Structural rewrites (file-shape-changing, ordered) ----
 
   - id: rewrite-root-layout
-    name: R1 — Convert layout.tsx to __root.tsx
+    name: R1 — Convert layout.tsx / _app.tsx to __root.tsx
     type: automatic
     depends_on: [scaffold-tanstack-files]
     steps:
@@ -65,10 +85,14 @@ nodes:
             - "**/src/app/layout.jsx"
             - "**/app/layout.tsx"
             - "**/app/layout.jsx"
+            - "**/src/pages/_app.tsx"
+            - "**/src/pages/_app.jsx"
+            - "**/pages/_app.tsx"
+            - "**/pages/_app.jsx"
           exclude: *shared-excludes
 
   - id: rewrite-api-routes
-    name: R6 — Convert route.ts to createFileRoute handlers
+    name: R6 — App route.ts + api/**/*.ts + Pages api/ → createFileRoute handlers
     type: automatic
     depends_on: [rewrite-root-layout]
     steps:
@@ -81,10 +105,18 @@ nodes:
             - "**/src/app/**/route.js"
             - "**/app/**/route.ts"
             - "**/app/**/route.js"
+            - "**/src/app/api/**/*.ts"
+            - "**/src/app/api/**/*.js"
+            - "**/app/api/**/*.ts"
+            - "**/app/api/**/*.js"
+            - "**/src/pages/api/**/*.ts"
+            - "**/src/pages/api/**/*.js"
+            - "**/pages/api/**/*.ts"
+            - "**/pages/api/**/*.js"
           exclude: *shared-excludes
 
   - id: rewrite-pages
-    name: R2 — Wrap page components in createFileRoute + rename
+    name: R2 — Wrap page components in createFileRoute + rename (app + pages router)
     type: automatic
     depends_on: [rewrite-api-routes]
     steps:
@@ -97,12 +129,36 @@ nodes:
             - "**/src/app/**/page.jsx"
             - "**/app/**/page.tsx"
             - "**/app/**/page.jsx"
+            - "**/src/pages/**/*.tsx"
+            - "**/src/pages/**/*.jsx"
+            - "**/pages/**/*.tsx"
+            - "**/pages/**/*.jsx"
+          exclude: *shared-excludes
+
+  - id: repair-route-file-tails-post-pages
+    name: R2a — Truncate orphan text after first Route (after R2 wrap)
+    type: automatic
+    depends_on: [rewrite-pages]
+    steps:
+      - name: Drop duplicate Route blocks / partial SSG tails early
+        js-ast-grep:
+          js_file: scripts/entries/repair-route-file-tails.ts
+          language: tsx
+          include:
+            - "**/src/app/**/*.ts"
+            - "**/src/app/**/*.tsx"
+            - "**/src/app/**/*.js"
+            - "**/src/app/**/*.jsx"
+            - "**/app/**/*.ts"
+            - "**/app/**/*.tsx"
+            - "**/app/**/*.js"
+            - "**/app/**/*.jsx"
           exclude: *shared-excludes
 
   - id: rewrite-special-next-files
     name: R2b — loading / error / not-found / template.tsx (next2tanstack parity)
     type: automatic
-    depends_on: [rewrite-pages]
+    depends_on: [repair-route-file-tails-post-pages]
     steps:
       - name: Map Next special routes to TanStack route modules (template.tsx best-effort)
         js-ast-grep:
@@ -143,16 +199,7 @@ nodes:
             - "**/src/app/**/*.jsx"
             - "**/app/**/*.tsx"
             - "**/app/**/*.jsx"
-          exclude:
-            - "**/node_modules/**"
-            - "**/.next/**"
-            - "**/dist/**"
-            - "**/build/**"
-            - "**/coverage/**"
-            - "**/.git/**"
-            - "**/.*/**"
-            - "**/src/app/__root.tsx"
-            - "**/app/__root.tsx"
+          exclude: *shared-excludes
 
   - id: rewrite-metadata
     name: R7 — Convert `export const metadata` to head() config
@@ -170,42 +217,18 @@ nodes:
             - "**/app/**/*.tsx"
           exclude: *shared-excludes
 
-  - id: annotate-async-pages
-    name: R10 — Async loaders (manual follow-up placeholder)
-    type: automatic
-    depends_on: [rewrite-metadata]
-    steps:
-      - name: No-op (automatic Route.loader extraction is intentionally skipped)
-        js-ast-grep:
-          js_file: scripts/entries/annotate-async-pages.ts
-          language: tsx
-          include:
-            - "**/src/app/**/*.tsx"
-            - "**/src/app/**/*.jsx"
-            - "**/app/**/*.tsx"
-            - "**/app/**/*.jsx"
-          exclude: *shared-excludes
-
   # ---- Cross-cutting rewrites (deep src/ + app dirs, any depth under target) ----
 
   - id: rewrite-fonts
     name: R9 — Strip next/font and record font names for later steps
     type: automatic
-    depends_on: [annotate-async-pages]
+    depends_on: [rewrite-metadata]
     steps:
       - name: Remove imports + className refs + write .codemod/state.json
         js-ast-grep:
           js_file: scripts/entries/rewrite-fonts.ts
           language: tsx
-          include:
-            - "**/src/**/*.tsx"
-            - "**/src/**/*.jsx"
-            - "**/src/**/*.ts"
-            - "**/src/**/*.js"
-            - "**/app/**/*.tsx"
-            - "**/app/**/*.jsx"
-            - "**/app/**/*.ts"
-            - "**/app/**/*.js"
+          include: *cross-cutting-ts
           exclude: *shared-excludes
 
   - id: rewrite-server-fns
@@ -218,11 +241,7 @@ nodes:
           js_file: scripts/entries/rewrite-server-fns.ts
           language: tsx
           semantic_analysis: workspace
-          include:
-            - "**/src/**/*.ts"
-            - "**/src/**/*.tsx"
-            - "**/app/**/*.ts"
-            - "**/app/**/*.tsx"
+          include: *cross-cutting-server-fn
           exclude: *shared-excludes
 
   - id: rewrite-link-image
@@ -235,11 +254,7 @@ nodes:
           js_file: scripts/entries/rewrite-link-image.ts
           language: tsx
           semantic_analysis: workspace
-          include:
-            - "**/src/**/*.tsx"
-            - "**/src/**/*.jsx"
-            - "**/app/**/*.tsx"
-            - "**/app/**/*.jsx"
+          include: *cross-cutting-tsx
           exclude: *shared-excludes
 
   - id: rewrite-next-navigation
@@ -251,11 +266,103 @@ nodes:
         js-ast-grep:
           js_file: scripts/entries/rewrite-next-navigation.ts
           language: tsx
+          include: *cross-cutting-tsx
+          exclude: *shared-excludes
+
+  - id: rewrite-next-dynamic-script
+    name: R4c — next/dynamic + next/script (safe subset)
+    type: automatic
+    depends_on: [rewrite-next-navigation]
+    steps:
+      - name: dynamic → React.lazy; Script → native script when patterns are safe
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-next-dynamic-script.ts
+          language: tsx
+          include: *cross-cutting-tsx
+          exclude: *shared-excludes
+
+  - id: rewrite-next-i18next-imports
+    name: R4d — next-i18next → react-i18next (cross-cutting)
+    type: automatic
+    depends_on: [rewrite-next-dynamic-script]
+    steps:
+      - name: Shared components + all TS/JS — align with bootstrap I18next instance
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-next-i18next-imports.ts
+          language: tsx
+          include: *cross-cutting-ts
+          exclude: *shared-excludes
+
+  - id: annotate-async-pages
+    name: R10 — TODO for async route components still awaiting at render
+    type: automatic
+    depends_on: [rewrite-next-i18next-imports]
+    steps:
+      - name: Insert migration note when createFileRoute components use top-level await
+        js-ast-grep:
+          js_file: scripts/entries/annotate-async-pages.ts
+          language: tsx
+          include: *cross-cutting-tsx
+          exclude: *shared-excludes
+
+  - id: rewrite-next-pages-data
+    name: R10a — Strip getStaticProps / next-i18next SSG / next/head from app routes
+    type: automatic
+    depends_on: [annotate-async-pages]
+    steps:
+      - name: Remove Pages data-fetching exports and migrate remaining imports
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-next-pages-data.ts
+          language: tsx
           include:
-            - "**/src/**/*.tsx"
-            - "**/src/**/*.jsx"
+            - "**/src/app/**/*.tsx"
+            - "**/src/app/**/*.jsx"
             - "**/app/**/*.tsx"
             - "**/app/**/*.jsx"
+          exclude: *shared-excludes
+
+  - id: repair-route-file-tails
+    name: R10a-bis — Truncate orphan text after first export const Route (app *.ts/*.tsx)
+    type: automatic
+    depends_on: [rewrite-next-pages-data]
+    steps:
+      - name: Keep only the first createFileRoute(...)() block (fixes invalid tails on API routes and pages)
+        js-ast-grep:
+          js_file: scripts/entries/repair-route-file-tails.ts
+          language: tsx
+          include:
+            - "**/src/app/**/*.ts"
+            - "**/src/app/**/*.tsx"
+            - "**/src/app/**/*.js"
+            - "**/src/app/**/*.jsx"
+            - "**/app/**/*.ts"
+            - "**/app/**/*.tsx"
+            - "**/app/**/*.js"
+            - "**/app/**/*.jsx"
+          exclude: *shared-excludes
+
+  - id: strip-unused-next-imports
+    name: R10a-ter — Remove wholly-unused next/* imports
+    type: automatic
+    depends_on: [repair-route-file-tails]
+    steps:
+      - name: Delete import statements when no binding is referenced
+        js-ast-grep:
+          js_file: scripts/entries/strip-unused-next-imports.ts
+          language: tsx
+          include: *cross-cutting-ts
+          exclude: *shared-excludes
+
+  - id: annotate-remaining-next-imports
+    name: R10b — TODO for surviving next/* imports and middleware.ts
+    type: automatic
+    depends_on: [strip-unused-next-imports]
+    steps:
+      - name: Line-level // TODO before each remaining Next import
+        js-ast-grep:
+          js_file: scripts/entries/annotate-remaining-next-imports.ts
+          language: tsx
+          include: *cross-cutting-ts
           exclude: *shared-excludes
 
   # ---- Static assets + companion patches ----
@@ -263,7 +370,7 @@ nodes:
   - id: patch-globals-css
     name: R12 — Inject @fontsource and @theme blocks
     type: automatic
-    depends_on: [rewrite-next-navigation]
+    depends_on: [annotate-remaining-next-imports]
     steps:
       - name: Add font imports to globals.css
         js-ast-grep:
@@ -289,12 +396,90 @@ nodes:
             - "**/package.json"
           exclude: *shared-excludes
 
+  - id: patch-cjs-root-configs-for-esm
+    name: R11b — next-i18next.config.js CommonJS → ESM when type module
+    type: automatic
+    depends_on: [patch-package-json]
+    steps:
+      - name: Rewrite single module.exports in next-i18next.config.js to export default
+        js-ast-grep:
+          js_file: scripts/entries/patch-cjs-root-configs-for-esm.ts
+          language: json
+          include:
+            - "**/package.json"
+          exclude: *shared-excludes
+
+  - id: patch-tooling-and-docs
+    name: R13 — tsconfig / ESLint JSON / README & workflows (no adjacent Next peers)
+    type: automatic
+    depends_on: [patch-cjs-root-configs-for-esm]
+    steps:
+      - name: Strip Next tsconfig plugin, patch extends; replace next CLI refs in docs/CI
+        js-ast-grep:
+          js_file: scripts/entries/patch-tooling-and-docs.ts
+          language: json
+          include:
+            - "**/package.json"
+          exclude: *shared-excludes
+
+  - id: cleanup-legacy-pages
+    name: R14 — Relocate or remove leftover pages/ directories
+    type: automatic
+    depends_on: [patch-tooling-and-docs]
+    steps:
+      - name: Move unmigrated pages files to migrated-from-pages/ then delete pages/
+        js-ast-grep:
+          js_file: scripts/entries/cleanup-legacy-pages-dir.ts
+          language: json
+          include:
+            - "**/package.json"
+          exclude: *shared-excludes
+
+  - id: ensure-app-root
+    name: R14b — Ensure __root.tsx exists for TanStack route generation
+    type: automatic
+    depends_on: [cleanup-legacy-pages]
+    steps:
+      - name: Write minimal src/app/__root.tsx (or app/__root.tsx) when missing
+        js-ast-grep:
+          js_file: scripts/entries/ensure-app-root.ts
+          language: json
+          include:
+            - "**/package.json"
+          exclude: *shared-excludes
+
+  - id: patch-root-i18n-provider
+    name: R14c — I18nextProvider + src/i18n.ts when .codemod/i18n.json exists
+    type: automatic
+    depends_on: [ensure-app-root]
+    steps:
+      - name: Bootstrap i18next, patch __root, preload i18n from router
+        js-ast-grep:
+          js_file: scripts/entries/patch-root-i18n-provider.ts
+          language: json
+          include:
+            - "**/package.json"
+          exclude: *shared-excludes
+
+  - id: write-migration-guide
+    name: Manual migration checklist (next steps for humans)
+    type: automatic
+    depends_on: [patch-root-i18n-provider]
+    steps:
+      - name: Write TANSTACK_MIGRATION_NEXT_STEPS.md beside migrated package.json
+        js-ast-grep:
+          js_file: scripts/entries/write-migration-guide.ts
+          language: json
+          include:
+            - "**/package.json"
+          exclude: *shared-excludes
+
   # ---- Finalisation ----
 
   - id: finalize-cleanup
     name: Remove codemod sidecar state
     type: automatic
-    depends_on: [patch-package-json]
+    depends_on: [write-migration-guide]
     steps:
       - name: Drop .codemod/state.json
         js-ast-grep:

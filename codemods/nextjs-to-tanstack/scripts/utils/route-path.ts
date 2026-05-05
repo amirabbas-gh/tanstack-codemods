@@ -1,5 +1,5 @@
 /**
- * Convert a Next.js App Router file path into its TanStack Start equivalent.
+ * Convert Next.js App Router or Pages Router file paths into TanStack Start equivalents.
  *
  * Rules (per the official migration guide):
  *   src/app/page.tsx                        → src/app/index.tsx             "/"
@@ -10,6 +10,13 @@
  *   src/app/(marketing)/about/page.tsx      → src/app/about.tsx             "/about"
  *   src/app/api/hello/route.ts              → src/app/api/hello.ts          "/api/hello"
  *   src/app/layout.tsx                      → src/app/__root.tsx            (root)
+ *
+ * Pages Router (same TanStack `src/app` targets):
+ *   src/pages/index.tsx                     → src/app/index.tsx             "/"
+ *   src/pages/about.tsx                     → src/app/about.tsx             "/about"
+ *   src/pages/blog/index.tsx              → src/app/blog.tsx              "/blog"
+ *   src/pages/blog/[slug].tsx             → src/app/blog/$slug.tsx        "/blog/$slug"
+ *   src/pages/api/hello.ts                → src/app/api/hello.ts          "/api/hello"
  *
  * Everything operates on POSIX-style paths. No filesystem access.
  */
@@ -46,8 +53,8 @@ const SEG_GROUP = /^\(([^)]+)\)$/;
 
 const normalize = (path: string): string => path.replace(/\\/g, "/");
 
-const stripAppPrefix = (path: string): { head: string; rest: string[] } | null => {
-  const parts = normalize(path).split("/");
+export const stripAppPrefix = (path: string): { head: string; rest: string[] } | null => {
+  const parts = normalize(path).split("/").filter(Boolean);
   const appIdx = parts.lastIndexOf("app");
   if (appIdx === -1) return null;
 
@@ -55,6 +62,25 @@ const stripAppPrefix = (path: string): { head: string; rest: string[] } | null =
   const rest = parts.slice(appIdx + 1);
   return { head, rest };
 };
+
+/** Same idea as `stripAppPrefix` but for the `pages/` directory (src/pages or root `pages`). */
+export const stripPagesPrefix = (path: string): { head: string; rest: string[] } | null => {
+  const parts = normalize(path).split("/").filter(Boolean);
+  const pagesIdx = parts.lastIndexOf("pages");
+  if (pagesIdx === -1) return null;
+
+  const head = parts.slice(0, pagesIdx + 1).join("/");
+  const rest = parts.slice(pagesIdx + 1);
+  return { head, rest };
+};
+
+function pagesHeadToAppHead(pagesHead: string): string {
+  if (pagesHead === "pages") return "app";
+  if (pagesHead.endsWith("/pages")) {
+    return `${pagesHead.slice(0, -"/pages".length)}/app`;
+  }
+  return pagesHead.replace(/\/pages$/, "/app");
+}
 
 const detectKind = (fileName: string | undefined): NextFileKind => {
   if (!fileName) return "other";
@@ -126,9 +152,12 @@ const translateSegment = (seg: string): SegmentTranslation => {
  * Mirrors conventions from `/Users/amir/Desktop/codemod/next2tanstack`.
  */
 export function computeSpecialRouteFileTransform(relativePath: string): SpecialRouteFileResult | null {
-  const split = stripAppPrefix(relativePath);
+  const appSplit = stripAppPrefix(relativePath);
+  const pagesSplit = appSplit ? null : stripPagesPrefix(relativePath);
+  const split = appSplit ?? pagesSplit;
   if (!split) return null;
-  const { head, rest } = split;
+  const { head: routerHead, rest } = split;
+  const head = pagesSplit ? pagesHeadToAppHead(routerHead) : routerHead;
 
   const fileName = rest.at(-1);
   const variant = classifySpecialRouteFileBasename(fileName);
@@ -178,23 +207,46 @@ export function computeSpecialRouteFileTransform(relativePath: string): SpecialR
 }
 
 /**
- * Given the relative path of a Next App Router source file, return the
- * TanStack Start target path + route string.
+ * Given the relative path of a Next.js App Router or Pages Router source file,
+ * return the TanStack Start target path + route string.
  *
- * Returns null when the file doesn't live inside an `app/` directory or the
+ * Returns null when the file doesn't live inside `app/` or `pages/`, or the
  * conversion is not supported (e.g. parallel/intercepting routes like
  * `@modal/` or `(.)foo`).
  */
 export function computeRoutePath(relativePath: string): RoutePathResult | null {
-  const split = stripAppPrefix(relativePath);
-  if (!split) return null;
+  const appSplit = stripAppPrefix(relativePath);
+  if (appSplit) {
+    return computeAppRouterRoutePath(relativePath, appSplit);
+  }
+  const pagesSplit = stripPagesPrefix(relativePath);
+  if (pagesSplit) {
+    return computePagesRouterRoutePath(pagesSplit);
+  }
+  return null;
+}
+
+function computeAppRouterRoutePath(
+  _relativePath: string,
+  split: { head: string; rest: string[] },
+): RoutePathResult | null {
   const { head, rest } = split;
 
   const fileName = rest.at(-1);
   const dirSegs = rest.slice(0, -1);
   const kind = detectKind(fileName);
 
-  if (kind === "other") return null;
+  // `app/api/hello.ts`, `app/api/blog/$slug.ts` (TanStack/flat API modules — not `route.ts`)
+  if (kind === "other") {
+    const ext = fileName!.slice(fileName!.indexOf("."));
+    if (
+      dirSegs[0] === "api" &&
+      /\.(m|c)?tsx?$|\.(m|c)?jsx?$|\.(m)?ts$/.test(ext)
+    ) {
+      return computeAppRouterApiLeafModule(head, dirSegs, fileName!, ext);
+    }
+    return null;
+  }
 
   const ext = fileName!.slice(fileName!.indexOf("."));
 
@@ -274,6 +326,188 @@ export function computeRoutePath(relativePath: string): RoutePathResult | null {
     wasCatchAll,
     dynamicSegmentName: dynamicName,
   };
+}
+
+/** `app/api/*.ts` modules (e.g. `hello.ts`, `blog/$slug.ts`) — not `route.ts`. */
+function computeAppRouterApiLeafModule(
+  head: string,
+  dirSegs: string[],
+  fileName: string,
+  ext: string,
+): RoutePathResult | null {
+  const baseName = fileName.slice(0, fileName.indexOf("."));
+  const stemSegments = [...dirSegs, baseName];
+  const translated: string[] = [];
+  let wasCatchAll = false;
+  let dynamicName: string | null = null;
+  for (const seg of stemSegments) {
+    const t = translateSegment(seg);
+    if (t.group) return null;
+    if (t.text === null) return null;
+    translated.push(t.text);
+    if (t.catchAll) wasCatchAll = true;
+    if (t.dynamic) dynamicName = t.dynamic;
+  }
+  const parentDir = translated.slice(0, -1);
+  const leaf = translated.at(-1)!;
+  const newDir = parentDir.length === 0 ? head : `${head}/${parentDir.join("/")}`;
+  const routeDir = parentDir.length === 0 ? "" : `/${parentDir.join("/")}`;
+  return {
+    newPath: `${newDir}/${leaf}${ext}`,
+    routePath: `${routeDir}/${leaf}`,
+    kind: "route",
+    wasCatchAll,
+    dynamicSegmentName: dynamicName,
+  };
+}
+
+/**
+ * Map `src/pages/**` or `pages/**` to the same `app` tree used by App Router output.
+ */
+function computePagesRouterRoutePath(split: {
+  head: string;
+  rest: string[];
+}): RoutePathResult | null {
+  const { head, rest } = split;
+  if (rest.length === 0) return null;
+
+  const fileName = rest.at(-1)!;
+  const dirSegs = rest.slice(0, -1);
+  const ext = fileName.slice(fileName.indexOf("."));
+  const baseName = fileName.slice(0, fileName.indexOf("."));
+
+  if (
+    /^(?:_app|_document|_middleware)$/.test(baseName) &&
+    /\.(?:t|j)sx?$/.test(ext)
+  ) {
+    return null;
+  }
+
+  if (
+    /^_error$/.test(baseName) &&
+    /\.(?:t|j)sx?$/.test(ext)
+  ) {
+    return null;
+  }
+
+  if (baseName.startsWith("_")) return null;
+
+  const targetHead = pagesHeadToAppHead(head);
+
+  // API routes: `pages/api/.../*.ts`
+  if (dirSegs[0] === "api") {
+    if (!/\.(m|c)?tsx?$|\.(m|c)?jsx?$|\.(m)?ts$/.test(ext)) return null;
+    const stemSegments = [...dirSegs, baseName];
+    const translated: string[] = [];
+    let wasCatchAll = false;
+    let dynamicName: string | null = null;
+    for (const seg of stemSegments) {
+      const t = translateSegment(seg);
+      if (t.group) return null;
+      if (t.text === null) return null;
+      translated.push(t.text);
+      if (t.catchAll) wasCatchAll = true;
+      if (t.dynamic) dynamicName = t.dynamic;
+    }
+    const parentDir = translated.slice(0, -1);
+    const leaf = translated.at(-1)!;
+    const newDir = parentDir.length === 0 ? targetHead : `${targetHead}/${parentDir.join("/")}`;
+    const routeDir = parentDir.length === 0 ? "" : `/${parentDir.join("/")}`;
+    return {
+      newPath: `${newDir}/${leaf}${ext}`,
+      routePath: `${routeDir}/${leaf}`,
+      kind: "route",
+      wasCatchAll,
+      dynamicSegmentName: dynamicName,
+    };
+  }
+
+  if (!/\.(?:t|j)sx?$/.test(ext)) return null;
+
+  // `pages/index.tsx` → `app/index.tsx`
+  if (baseName === "index") {
+    const translated: string[] = [];
+    let wasCatchAll = false;
+    let dynamicName: string | null = null;
+    let hasOptionalCatchAll = false;
+    for (const seg of dirSegs) {
+      const t = translateSegment(seg);
+      if (t.group) return null;
+      if (t.text === null) return null;
+      translated.push(t.text);
+      if (t.catchAll) wasCatchAll = true;
+      if (t.optionalCatchAll) hasOptionalCatchAll = true;
+      if (t.dynamic) dynamicName = t.dynamic;
+    }
+    if (translated.length === 0) {
+      return {
+        newPath: `${targetHead}/index${ext}`,
+        routePath: "/",
+        kind: "page",
+        wasCatchAll: false,
+        dynamicSegmentName: null,
+      };
+    }
+    const parentDir = translated.slice(0, -1);
+    const leaf = translated.at(-1)!;
+    const newDir = parentDir.length === 0 ? targetHead : `${targetHead}/${parentDir.join("/")}`;
+    const routeDir = parentDir.length === 0 ? "" : `/${parentDir.join("/")}`;
+    const splatRoutePath = `${routeDir}/${leaf}`;
+    const pageResult: RoutePathResult = {
+      newPath: `${newDir}/${leaf}${ext}`,
+      routePath: splatRoutePath,
+      kind: "page",
+      wasCatchAll,
+      dynamicSegmentName: dynamicName,
+    };
+    if (hasOptionalCatchAll && parentDir.length > 0) {
+      pageResult.optionalCatchAllRedirect = {
+        indexNewPath: `${newDir}/index${ext}`,
+        indexRoutePath: routeDir,
+        splatRoutePath,
+      };
+    }
+    return pageResult;
+  }
+
+  // `pages/about.tsx`, `pages/docs/a.tsx`, `pages/blog/[slug].tsx`
+  const stemSegments = [...dirSegs, baseName];
+  const translated: string[] = [];
+  let wasCatchAll = false;
+  let dynamicName: string | null = null;
+  let hasOptionalCatchAll = false;
+  for (const seg of stemSegments) {
+    const t = translateSegment(seg);
+    if (t.group) return null;
+    if (t.text === null) return null;
+    translated.push(t.text);
+    if (t.catchAll) wasCatchAll = true;
+    if (t.optionalCatchAll) hasOptionalCatchAll = true;
+    if (t.dynamic) dynamicName = t.dynamic;
+  }
+
+  const parentDir = translated.slice(0, -1);
+  const leaf = translated.at(-1)!;
+  if (translated.length === 0) return null;
+
+  const newDir = parentDir.length === 0 ? targetHead : `${targetHead}/${parentDir.join("/")}`;
+  const routeDir = parentDir.length === 0 ? "" : `/${parentDir.join("/")}`;
+  const splatRoutePath = `${routeDir}/${leaf}`;
+  const pageResult: RoutePathResult = {
+    newPath: `${newDir}/${leaf}${ext}`,
+    routePath: splatRoutePath,
+    kind: "page",
+    wasCatchAll,
+    dynamicSegmentName: dynamicName,
+  };
+  if (hasOptionalCatchAll && parentDir.length > 0) {
+    pageResult.optionalCatchAllRedirect = {
+      indexNewPath: `${newDir}/index${ext}`,
+      indexRoutePath: routeDir,
+      splatRoutePath,
+    };
+  }
+  return pageResult;
 }
 
 /**

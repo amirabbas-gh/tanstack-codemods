@@ -1,0 +1,16 @@
+{
+  "nextjs-to-tanstack-r10b-next-import": [
+    {
+      "cardinality": {
+        "context": "middleware"
+      },
+      "count": 1
+    },
+    {
+      "cardinality": {
+        "module": "next/server"
+      },
+      "count": 1
+    }
+  ]
+}

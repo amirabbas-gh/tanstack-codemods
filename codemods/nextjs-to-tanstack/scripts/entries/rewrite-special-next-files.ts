@@ -12,13 +12,21 @@
 import type { Codemod, Edit, SgNode } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { addImport } from "../utils/imports.ts";
-import { ensureParentDir } from "../utils/ensure-parent-dir.ts";
-import { getAppRelativePath, resolveRenameTarget } from "../utils/paths.ts";
+import { ensureParentDir, pruneEmptyAncestorsAfterRename } from "../utils/ensure-parent-dir.ts";
+import {
+  getAppRelativePath,
+  getFilename,
+  inferCodemodTargetDir,
+  resolveRenameTarget,
+} from "../utils/paths.ts";
 import {
   classifySpecialRouteFileBasename,
   computeSpecialRouteFileTransform,
 } from "../utils/route-path.ts";
+import { applyOptionalLocaleToSpecialRouteFile } from "../utils/i18n-optional-locale-path.ts";
+import { readResolvedI18nConfig } from "../utils/read-next-i18n-config.ts";
 import { hasReviewSentinel, insertReviewBefore } from "../utils/sentinels.ts";
+import { deepenRelativeParentImports } from "../utils/deepen-relative-imports.ts";
 
 const TANSTACK_ROUTER = "@tanstack/react-router";
 const TEMPLATE_RE = /^template\.(t|j)sx?$/;
@@ -33,8 +41,14 @@ const codemod: Codemod<TSX> = async (root) => {
 
   if (!classifySpecialRouteFileBasename(base)) return null;
 
-  const routeInfo = computeSpecialRouteFileTransform(relative);
+  let routeInfo = computeSpecialRouteFileTransform(relative);
   if (!routeInfo) return null;
+
+  const pkgRoot = inferCodemodTargetDir(getFilename(root));
+  const i18nCfg = readResolvedI18nConfig(pkgRoot);
+  if (i18nCfg) {
+    routeInfo = applyOptionalLocaleToSpecialRouteFile(routeInfo);
+  }
 
   const rootNode = root.root();
 
@@ -102,8 +116,13 @@ const codemod: Codemod<TSX> = async (root) => {
 
   const newPath = resolveRenameTarget(root, routeInfo.newPath);
   ensureParentDir(newPath);
-  const out = rootNode.commitEdits(edits);
+  const oldAbsPath = getFilename(root);
+  let out = rootNode.commitEdits(edits);
+  if (i18nCfg && routeInfo.newPath.includes("{-$locale}")) {
+    out = deepenRelativeParentImports(out);
+  }
   root.rename(newPath);
+  pruneEmptyAncestorsAfterRename(oldAbsPath);
   return out;
 };
 

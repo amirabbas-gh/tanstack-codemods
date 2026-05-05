@@ -17,11 +17,40 @@ import { addImport } from "../utils/imports.ts";
 import {
   computeRoutePath,
   detectNextFileKind,
+  stripAppPrefix,
+  stripPagesPrefix,
   type RoutePathResult,
 } from "../utils/route-path.ts";
-import { ensureParentDir } from "../utils/ensure-parent-dir.ts";
-import { getAppRelativePath, resolveRenameTarget } from "../utils/paths.ts";
+import { ensureParentDir, pruneEmptyAncestorsAfterRename } from "../utils/ensure-parent-dir.ts";
+import { getAppRelativePath, getFilename, inferCodemodTargetDir, normalizePath, resolveRenameTarget } from "../utils/paths.ts";
+import { applyOptionalLocaleToRoutePathResult } from "../utils/i18n-optional-locale-path.ts";
+import { readResolvedI18nConfig } from "../utils/read-next-i18n-config.ts";
 import { insertTodoBefore } from "../utils/sentinels.ts";
+import { deepenRelativeParentImports } from "../utils/deepen-relative-imports.ts";
+
+/**
+ * `src/pages/<dir>/index.tsx` → `src/app/<dir>.tsx` removes one directory level; relative
+ * imports that used `../../` to reach `src/` must become `../`.
+ */
+function shouldCollapseChildIndexImports(relative: string): boolean {
+  /**
+   * Paths like `src/pages/segment/index.tsx` become `app/segment.tsx` (one fewer directory).
+   * `src/pages/index.tsx` → `app/index.tsx` keeps the same depth — do not collapse imports.
+   */
+  return /(^|\/)pages\/(.+)\/index\.(tsx|jsx)$/i.test(normalizePath(relative));
+}
+
+/** Reduce leading `../` by one in `from '…'` paths when at least two `../` segments exist. */
+function collapseOneRelativeImportLevel(source: string): string {
+  return source.replace(
+    /(\bfrom\s+["'])(\.\.\/)+/g,
+    (full, prefix: string) => {
+      const n = (full.match(/\.\.\//g) ?? []).length;
+      if (n <= 1) return full;
+      return `${prefix}${"../".repeat(n - 1)}`;
+    },
+  );
+}
 
 const TANSTACK_ROUTER = "@tanstack/react-router";
 const PAGES_DOC =
@@ -29,7 +58,22 @@ const PAGES_DOC =
 
 const codemod: Codemod<TSX> = async (root) => {
   const relative = getAppRelativePath(root);
-  if (detectNextFileKind(relative) !== "page") {
+  if (stripAppPrefix(relative)) {
+    if (detectNextFileKind(relative) !== "page") {
+      return null;
+    }
+  } else if (stripPagesPrefix(relative)) {
+    if (relative.includes("/pages/api/")) {
+      return null;
+    }
+    const leaf = relative.split("/").pop() ?? "";
+    if (
+      /^_(?:app|document|error|middleware)\.(t|j)sx?$/.test(leaf) ||
+      (leaf.startsWith("_") && /\.(?:t|j)sx?$/.test(leaf))
+    ) {
+      return null;
+    }
+  } else {
     return null;
   }
 
@@ -50,8 +94,16 @@ const codemod: Codemod<TSX> = async (root) => {
     return null;
   }
 
-  const routeInfo = computeRoutePath(relative);
+  let routeInfo = computeRoutePath(relative);
   if (!routeInfo || routeInfo.routePath === null) {
+    return emitTodo(rootNode);
+  }
+  const pkgRoot = inferCodemodTargetDir(getFilename(root));
+  const i18n = readResolvedI18nConfig(pkgRoot);
+  if (i18n) {
+    routeInfo = applyOptionalLocaleToRoutePathResult(routeInfo);
+  }
+  if (routeInfo.routePath === null) {
     return emitTodo(rootNode);
   }
 
@@ -64,7 +116,14 @@ const codemod: Codemod<TSX> = async (root) => {
     // declaration that references the identifier. Anything else → TODO.
     const ident = firstChildOfKind(defaultExport, "identifier");
     if (!ident) return emitTodo(rootNode, defaultExport);
-    return wrapIdentifierExport(root, rootNode, defaultExport, ident, routeInfo);
+    return wrapIdentifierExport(
+      root,
+      rootNode,
+      defaultExport,
+      ident,
+      routeInfo,
+      Boolean(i18n && routeInfo.newPath.includes("{-$locale}")),
+    );
   }
 
   const fnName = fn.field("name")?.text();
@@ -113,8 +172,16 @@ const codemod: Codemod<TSX> = async (root) => {
 
   const newPath = resolveRenameTarget(root, routeInfo.newPath);
   ensureParentDir(newPath);
-  const out = rootNode.commitEdits(edits);
+  const oldAbsPath = getFilename(root);
+  let out = rootNode.commitEdits(edits);
+  if (stripPagesPrefix(relative) && shouldCollapseChildIndexImports(relative)) {
+    out = collapseOneRelativeImportLevel(out);
+  }
+  if (i18n && routeInfo.newPath.includes("{-$locale}")) {
+    out = deepenRelativeParentImports(out);
+  }
   root.rename(newPath);
+  pruneEmptyAncestorsAfterRename(oldAbsPath);
   writeOptionalCatchAllIndex(root, routeInfo.optionalCatchAllRedirect);
   return out;
 };
@@ -127,6 +194,7 @@ function wrapIdentifierExport(
   defaultExport: SgNode<TSX>,
   identifier: SgNode<TSX>,
   routeInfo: RoutePathResult,
+  deepenImportsForLocaleFolder: boolean,
 ): string {
   const name = identifier.text();
   const routePath = routeInfo.routePath!;
@@ -157,8 +225,17 @@ function wrapIdentifierExport(
 
   const renamed = resolveRenameTarget(root, routeInfo.newPath);
   ensureParentDir(renamed);
-  const out = rootNode.commitEdits(edits);
+  const oldAbsPath = getFilename(root);
+  const relative = getAppRelativePath(root);
+  let out = rootNode.commitEdits(edits);
+  if (stripPagesPrefix(relative) && shouldCollapseChildIndexImports(relative)) {
+    out = collapseOneRelativeImportLevel(out);
+  }
+  if (deepenImportsForLocaleFolder && routeInfo.newPath.includes("{-$locale}")) {
+    out = deepenRelativeParentImports(out);
+  }
   root.rename(renamed);
+  pruneEmptyAncestorsAfterRename(oldAbsPath);
   writeOptionalCatchAllIndex(root, routeInfo.optionalCatchAllRedirect);
   return out;
 }

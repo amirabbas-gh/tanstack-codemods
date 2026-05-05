@@ -2,9 +2,11 @@
  * R4 + R5 — Swap `next/link` and `next/image` to their TanStack / Unpic
  * equivalents.
  *
- * R4 (`next/link` → `@tanstack/react-router` Link):
- *   - `import Link from "next/link"` → `import { Link } from "@tanstack/react-router"`.
- *   - Every `<Link href={...}>` using the imported alias → `<Link to={...}>`.
+ * R4 (`next/link` → `@tanstack/react-router` Link or `<a>`):
+ *   - `import Link from "next/link"` → `import { Link } from "@tanstack/react-router"` when needed.
+ *   - In-app `<Link href="/path">` → `<Link to="/path">`.
+ *   - Hash links (`#…`), absolute URLs, `mailto:`, `tel:`, `javascript:`, and protocol-relative
+ *     URLs become native `<a href>` so TanStack `Link` is not used for unsupported targets.
  *
  * R5 (`next/image` → `@unpic/react` Image):
  *   - `import Image from "next/image"` → `import { Image } from "@unpic/react"`.
@@ -56,27 +58,23 @@ function rewriteLink(rootNode: SgNode<TSX>, alias: string): Edit[] {
     return edits;
   }
 
-  const removeEdit = removeImport(rootNode, { type: "default", from: NEXT_LINK });
-  if (removeEdit) edits.push(removeEdit);
-
-  const addEdit = addImport(rootNode, {
-    type: "named",
-    specifiers: [alias === "Link" ? { name: "Link" } : { name: "Link", alias }],
-    from: TANSTACK_ROUTER,
-  });
-  if (addEdit) edits.push(addEdit);
-
   const opens = findJsxOpens(rootNode, alias);
+  let keepsTanstackLink = false;
+
   for (const opening of opens) {
     const target = outerJsxReplacementTarget(opening);
     const openEl = jsxOpeningFromSubject(target);
     if (!openEl) continue;
 
     const hrefAttr = findAttrOnOpening(openEl, "href");
-    if (hrefAttr && externalStaticHref(hrefAttr)) {
-      edits.push(target.replace(patchJsxAliasToAnchor(target.text(), alias)));
+    if (hrefAttr && hrefAttrRequiresNativeAnchor(hrefAttr)) {
+      edits.push(
+        target.replace(patchNextLinkFragmentToAnchor(target.text(), alias)),
+      );
       continue;
     }
+
+    keepsTanstackLink = true;
 
     for (const attr of openEl.findAll({ rule: { kind: "jsx_attribute" } })) {
       const prop = firstChildOfKind(attr, "property_identifier")?.text();
@@ -115,6 +113,23 @@ function rewriteLink(rootNode: SgNode<TSX>, alias: string): Edit[] {
     if (nameNode && nameNode.text() === "href") {
       edits.push(nameNode.replace("to"));
     }
+  }
+
+  const removeLinkEdit = removeImport(rootNode, { type: "default", from: NEXT_LINK });
+  if (removeLinkEdit) {
+    const endPos = keepsTanstackLink
+      ? removeLinkEdit.endPos
+      : extendRemovalPastOptionalBlankLine(source, removeLinkEdit.endPos);
+    edits.push({ ...removeLinkEdit, endPos });
+  }
+
+  if (keepsTanstackLink) {
+    const addEdit = addImport(rootNode, {
+      type: "named",
+      specifiers: [alias === "Link" ? { name: "Link" } : { name: "Link", alias }],
+      from: TANSTACK_ROUTER,
+    });
+    if (addEdit) edits.push(addEdit);
   }
 
   return edits;
@@ -163,15 +178,67 @@ function findAttrOnOpening(openEl: SgNode<TSX>, prop: string): SgNode<TSX> | nul
   return null;
 }
 
-function externalStaticHref(hrefAttr: SgNode<TSX>): boolean {
+/**
+ * Same-origin relative paths stay on TanStack `Link`; everything else becomes `<a href>`.
+ */
+function literalRequiresNativeAnchor(literal: string): boolean {
+  if (literal.length === 0) return false;
+  if (/^https?:\/\//i.test(literal)) return true;
+  if (literal.startsWith("//")) return true;
+  if (literal.startsWith("#")) return true;
+  if (/^mailto:/i.test(literal)) return true;
+  if (/^tel:/i.test(literal)) return true;
+  if (/^javascript:/i.test(literal)) return true;
+  return false;
+}
+
+function hrefAttrRequiresNativeAnchor(hrefAttr: SgNode<TSX>): boolean {
   const val = attrValueNode(hrefAttr);
   if (!val) return false;
   if (val.kind() === "string") {
     const frag = val.find({ rule: { kind: "string_fragment" } });
     const literal = frag?.text() ?? "";
-    return /^https?:\/\//.test(literal);
+    return literalRequiresNativeAnchor(literal);
+  }
+  if (val.kind() === "jsx_expression") {
+    const inner = jsxExpressionStringLiteral(val);
+    return inner != null && literalRequiresNativeAnchor(inner);
   }
   return false;
+}
+
+/** `href={"#x"}` / `href={'#x'}` */
+function jsxExpressionStringLiteral(expr: SgNode<TSX>): string | null {
+  const children = expr.children();
+  const meaningful = children.filter(
+    (c) => c.kind() !== "{" && c.kind() !== "}",
+  );
+  if (meaningful.length !== 1) return null;
+  const only = meaningful[0]!;
+  if (only.kind() !== "string") return null;
+  const frag = only.find({ rule: { kind: "string_fragment" } });
+  return frag?.text() ?? null;
+}
+
+function stripNextLinkOnlyAttrsFromConvertedAnchor(fragment: string): string {
+  let s = fragment;
+  const attrNames =
+    "prefetch|scroll|as|shallow|locale|legacyBehavior|passHref";
+  for (let i = 0; i < 12; i++) {
+    const t = s.replace(
+      new RegExp(`\\s(?:${attrNames})(?:=\\{[^}]*\\}|="[^"]*"|='[^']*')`, "g"),
+      "",
+    );
+    if (t === s) break;
+    s = t;
+  }
+  return s;
+}
+
+function patchNextLinkFragmentToAnchor(fragment: string, alias: string): string {
+  let s = patchJsxAliasToAnchor(fragment, alias);
+  s = stripNextLinkOnlyAttrsFromConvertedAnchor(s);
+  return s;
 }
 
 function patchJsxAliasToAnchor(fragment: string, alias: string): string {
@@ -193,8 +260,8 @@ function rewriteImage(rootNode: SgNode<TSX>, alias: string): Edit[] {
   const edits: Edit[] = [];
   const source = rootNode.text();
 
-  const removeEdit = removeImport(rootNode, { type: "default", from: NEXT_IMAGE });
-  if (removeEdit) edits.push(removeEdit);
+  const removeImageEdit = removeImport(rootNode, { type: "default", from: NEXT_IMAGE });
+  if (removeImageEdit) edits.push(removeImageEdit);
 
   const addEdit = addImport(rootNode, {
     type: "named",
@@ -312,4 +379,17 @@ function attrValueNode(attr: SgNode<TSX>): SgNode<TSX> | null {
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** After {@link removeImport}, eat one more line ending if the next line is blank. */
+function extendRemovalPastOptionalBlankLine(source: string, endPos: number): number {
+  let e = endPos;
+  if (source.slice(e, e + 2) === "\r\n") {
+    e += 2;
+  } else if (source[e] === "\n") {
+    e++;
+  } else if (source[e] === "\r") {
+    e++;
+  }
+  return e;
 }

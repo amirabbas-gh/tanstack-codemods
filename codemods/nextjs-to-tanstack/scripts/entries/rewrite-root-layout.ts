@@ -1,20 +1,22 @@
 /**
- * R1 — Convert `src/app/layout.tsx` to `src/app/__root.tsx`.
+ * R1 — Convert `src/app/layout.tsx` or `pages/_app.tsx` to `…/app/__root.tsx`.
  *
- * Scope: workflow's `include:` guarantees this script only sees root layouts.
+ * Scope: workflow `include:` for root layouts and the Pages Router shell.
  * The transform:
  *   1. Replaces the default-exported React component with
  *      `export const Route = createRootRoute({ component: RootLayout })` +
  *      a plain `function RootLayout()` whose body contains the rewritten
- *      `<html>` tree (HeadContent, Outlet, Scripts injected).
+ *      `<html>` tree (HeadContent, Outlet, Scripts injected), or for
+ *      `pages/_app.tsx` rewrites `<Component {...pageProps} />` to `<Outlet />`.
  *   2. Adds the necessary imports from `@tanstack/react-router` and
- *      `./globals.css?url`.
- *   3. Renames the file to `src/app/__root.tsx`.
+ *      `globals.css` (or `src/styles/globals.css`, etc.) as a `?url` import.
+ *   3. Renames the file to `src/app/__root.tsx` (or `app/__root.tsx`).
  *
  * Explicit non-goals for this step:
  *   - Metadata handling (see R7).
- *   - Non-function default exports (arrow expressions, re-exports). Those are
- *     annotated with a Tier-2 TODO and left alone.
+ *   - Default exports that are not `function …` or `hoc(Inner)` where `Inner`
+ *     names a top-level `function` (arrow expressions, re-exports, connect()()).
+ *     Those are annotated with a Tier-2 TODO and left alone.
  */
 
 import type { Codemod, Edit, SgNode } from "codemod:ast-grep";
@@ -23,9 +25,14 @@ import {
   addDefaultImport,
   addImport,
 } from "../utils/imports.ts";
-import { ensureParentDir } from "../utils/ensure-parent-dir.ts";
-import { getAppRelativePath, resolveRenameTarget } from "../utils/paths.ts";
+import { ensureParentDir, pruneEmptyAncestorsAfterRename } from "../utils/ensure-parent-dir.ts";
+import { getAppRelativePath, getFilename, inferCodemodTargetDir, resolveRenameTarget } from "../utils/paths.ts";
 import { insertTodoBefore } from "../utils/sentinels.ts";
+import { resolveGlobalsCssUrlImport } from "../utils/globals-css-path.ts";
+import {
+  readResolvedI18nConfig,
+  type NextI18nCodemodConfig,
+} from "../utils/read-next-i18n-config.ts";
 
 const TANSTACK_ROUTER = "@tanstack/react-router";
 const ROOT_ROUTE_DOC =
@@ -33,7 +40,11 @@ const ROOT_ROUTE_DOC =
 
 const codemod: Codemod<TSX> = async (root) => {
   const relative = getAppRelativePath(root);
-  if (!/\/layout\.(t|j)sx$|^layout\.(t|j)sx$/.test(relative)) {
+  const isLayout =
+    /\/layout\.(t|j)sx$|^layout\.(t|j)sx$/.test(relative);
+  const isPagesApp =
+    /\/_app\.(t|j)sx$|^_app\.(t|j)sx$/.test(relative);
+  if (!isLayout && !isPagesApp) {
     return null;
   }
   const rootNode = root.root();
@@ -55,12 +66,39 @@ const codemod: Codemod<TSX> = async (root) => {
   const defaultExport = findDefaultExport(rootNode);
   if (!defaultExport) return null;
 
-  const fn = findExportedFunction(defaultExport);
+  const defaultValue = getDefaultExportValue(defaultExport);
+  if (!defaultValue) return null;
+
+  const fn = resolveRootLayoutFunction(rootNode, defaultValue);
   if (!fn) {
     return emitTodo(rootNode, defaultExport);
   }
 
   const fnName = fn.field("name")?.text() ?? "RootLayout";
+
+  const newRelative = isPagesApp
+    ? pagesShellToAppRootPath(relative)
+    : relative.replace(/layout\.(t|j)sx$/, "__root.$1sx");
+  const target = resolveRenameTarget(root, newRelative);
+  const globalsUrl = resolveGlobalsCssUrlImport(
+    target,
+    rootNode.text(),
+    getFilename(root),
+  );
+
+  if (isPagesApp) {
+    return transformPagesAppRoot(
+      root,
+      rootNode,
+      defaultExport,
+      fn,
+      fnName,
+      relative,
+      globalsUrl,
+      defaultValue.kind() === "call_expression",
+    );
+  }
+
   const returnedJsx = findReturnedRootJsx(fn);
   if (!returnedJsx) {
     return emitTodo(rootNode, defaultExport);
@@ -79,29 +117,39 @@ const codemod: Codemod<TSX> = async (root) => {
   // the new imports into the replacement text instead.
   const hasAnyImport = rootNode.find({ rule: { kind: "import_statement" } }) !== null;
 
-  const replacement = buildReplacement(fnName, newJsx, hasAnyImport ? "" : PRELUDE_IMPORTS);
-  edits.push({
-    startPos: defaultExport.range().start.index,
-    endPos: defaultExport.range().end.index,
-    insertedText: replacement,
-  });
+  const isHocDefault = defaultValue.kind() === "call_expression";
+  const replacement = buildReplacement(fnName, newJsx, hasAnyImport ? "" : buildPreludeImports(globalsUrl));
+  if (isHocDefault) {
+    const start = Math.min(
+      fn.range().start.index,
+      defaultExport.range().start.index,
+    );
+    const end = Math.max(fn.range().end.index, defaultExport.range().end.index);
+    edits.push({
+      startPos: start,
+      endPos: end,
+      insertedText: replacement,
+    });
+  } else {
+    edits.push({
+      startPos: defaultExport.range().start.index,
+      endPos: defaultExport.range().end.index,
+      insertedText: replacement,
+    });
+  }
 
   if (hasAnyImport) {
-    const importEdits = collectImports(rootNode);
+    const importEdits = collectImports(rootNode, globalsUrl);
     edits.push(...importEdits);
   }
 
-  const newRelative = relative.replace(/layout\.(t|j)sx$/, "__root.$1sx");
-  const target = resolveRenameTarget(root, newRelative);
   ensureParentDir(target);
+  const oldAbsPath = getFilename(root);
   const out = rootNode.commitEdits(edits);
   root.rename(target);
+  pruneEmptyAncestorsAfterRename(oldAbsPath);
   return out;
 };
-
-const PRELUDE_IMPORTS =
-  `import { Outlet, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";\n` +
-  `import appCss from "./globals.css?url";\n\n`;
 
 export default codemod;
 
@@ -117,23 +165,107 @@ function findDefaultExport(rootNode: SgNode<TSX>): SgNode<TSX> | null {
   return null;
 }
 
-function findExportedFunction(exportStmt: SgNode<TSX>): SgNode<TSX> | null {
+function getDefaultExportValue(exportStmt: SgNode<TSX>): SgNode<TSX> | null {
   for (const child of exportStmt.children()) {
-    if (child.kind() === "function_declaration") return child;
+    const k = child.kind();
+    if (k === "export" || k === "default") continue;
+    if (k === ";") continue;
+    return child;
   }
   return null;
 }
 
+function resolveRootLayoutFunction(
+  rootNode: SgNode<TSX>,
+  value: SgNode<TSX>,
+): SgNode<TSX> | null {
+  if (value.kind() === "function_declaration") {
+    return value;
+  }
+  if (value.kind() === "call_expression") {
+    const inner = unwrapHocCallToFunction(rootNode, value);
+    if (inner) return inner;
+  }
+  return null;
+}
+
+function unwrapHocCallToFunction(
+  rootNode: SgNode<TSX>,
+  callExpr: SgNode<TSX>,
+): SgNode<TSX> | null {
+  const arg = firstCallArgument(callExpr);
+  if (!arg) return null;
+  if (arg.kind() === "identifier") {
+    return findFunctionDeclarationByName(rootNode, arg.text());
+  }
+  return null;
+}
+
+function firstCallArgument(callExpr: SgNode<TSX>): SgNode<TSX> | null {
+  const args = callExpr.field("arguments");
+  if (!args) return null;
+  for (const c of args.children()) {
+    const k = c.kind();
+    if (k === "(" || k === ")" || k === ",") continue;
+    return c;
+  }
+  return null;
+}
+
+function findFunctionDeclarationByName(
+  rootNode: SgNode<TSX>,
+  name: string,
+): SgNode<TSX> | null {
+  for (const stmt of rootNode.children()) {
+    if (stmt.kind() !== "function_declaration") continue;
+    if (stmt.field("name")?.text() === name) return stmt;
+  }
+  return null;
+}
+
+function buildPreludeImports(globalsUrl: string): string {
+  return (
+    `import { Outlet, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";\n` +
+    `import appCss from "${globalsUrl}";\n\n`
+  );
+}
+
 function findReturnedRootJsx(fn: SgNode<TSX>): SgNode<TSX> | null {
+  const ret = findReturnJsxElement(fn);
+  if (!ret) return null;
+  const open = directChildByKind(ret, "jsx_opening_element");
+  if (open?.field("name")?.text() !== "html") return null;
+  return ret;
+}
+
+/** First JSX element returned from a function (used for `pages/_app.tsx`). */
+function findReturnedAnyJsx(fn: SgNode<TSX>): SgNode<TSX> | null {
+  return findReturnJsxElement(fn);
+}
+
+function findReturnJsxElement(fn: SgNode<TSX>): SgNode<TSX> | null {
   const body = fn.field("body");
   if (!body) return null;
   const ret = body.find({ rule: { kind: "return_statement" } });
   if (!ret) return null;
   for (const child of ret.children()) {
-    if (child.kind() === "jsx_element") return child;
+    if (
+      child.kind() === "jsx_element" ||
+      child.kind() === "jsx_fragment" ||
+      child.kind() === "jsx_self_closing_element"
+    ) {
+      return child;
+    }
     if (child.kind() === "parenthesized_expression") {
-      const inner = child.find({ rule: { kind: "jsx_element" } });
-      if (inner) return inner;
+      for (const ic of child.children()) {
+        if (
+          ic.kind() === "jsx_element" ||
+          ic.kind() === "jsx_fragment" ||
+          ic.kind() === "jsx_self_closing_element"
+        ) {
+          return ic;
+        }
+      }
     }
   }
   return null;
@@ -303,7 +435,7 @@ function buildReplacement(
   );
 }
 
-function collectImports(rootNode: SgNode<TSX>): Edit[] {
+function collectImports(rootNode: SgNode<TSX>, globalsUrl: string): Edit[] {
   const edits: Edit[] = [];
   const routerImport = addImport(rootNode, {
     type: "named",
@@ -317,10 +449,126 @@ function collectImports(rootNode: SgNode<TSX>): Edit[] {
   });
   if (routerImport) edits.push(routerImport);
 
-  const cssImport = addDefaultImport(rootNode, "./globals.css?url", "appCss");
+  const cssImport = addDefaultImport(rootNode, globalsUrl, "appCss");
   if (cssImport) edits.push(cssImport);
 
   return edits;
+}
+
+/** `src/pages/_app.tsx` → `src/app/__root.tsx` (and root `pages/` → `app/`). */
+function pagesShellToAppRootPath(relative: string): string {
+  const withApp = relative.includes("/pages/")
+    ? relative.replace(/\/pages\//, "/app/")
+    : relative.replace(/^pages\//, "app/");
+  return withApp.replace(/_app\.(t|j)sx$/, "__root.$1sx");
+}
+
+function rebuildPagesAppJsx(source: string, jsxRoot: SgNode<TSX>): string | null {
+  const r = jsxRoot.range();
+  const frag = source.slice(r.start.index, r.end.index);
+  const next = frag
+    .replace(/<Component\s*\{\s*\.\.\.\s*pageProps\s*\}\s*\/>/g, "<Outlet />")
+    .replace(
+      /<Component\s*\{\s*\.\.\.\s*pageProps\s*\}\s*>\s*<\/Component>/g,
+      "<Outlet />",
+    )
+    .replace(/<Component\s*\/>/g, "<Outlet />");
+  if (next === frag) {
+    return null;
+  }
+  return next;
+}
+
+function transformPagesAppRoot(
+  root: Parameters<Codemod<TSX>>[0],
+  rootNode: SgNode<TSX>,
+  defaultExport: SgNode<TSX>,
+  fn: SgNode<TSX>,
+  fnName: string,
+  relative: string,
+  globalsUrl: string,
+  isHocDefault: boolean,
+): string {
+  const returnedJsx = findReturnedAnyJsx(fn);
+  if (!returnedJsx) {
+    return emitTodo(rootNode, defaultExport);
+  }
+  const source = rootNode.text();
+  const newJsx = rebuildPagesAppJsx(source, returnedJsx);
+  if (!newJsx) {
+    return emitTodo(rootNode, defaultExport);
+  }
+  const edits: Edit[] = [];
+  const hasAnyImport = rootNode.find({ rule: { kind: "import_statement" } }) !== null;
+  const prelude = hasAnyImport ? "" : buildPreludeImports(globalsUrl);
+  const inner = buildReplacement(fnName, newJsx, prelude);
+
+  if (isHocDefault) {
+    const start = Math.min(
+      fn.range().start.index,
+      defaultExport.range().start.index,
+    );
+    const end = Math.max(fn.range().end.index, defaultExport.range().end.index);
+    edits.push({
+      startPos: start,
+      endPos: end,
+      insertedText: inner,
+    });
+  } else {
+    edits.push({
+      startPos: defaultExport.range().start.index,
+      endPos: defaultExport.range().end.index,
+      insertedText: inner,
+    });
+  }
+
+  if (hasAnyImport) {
+    edits.push(...collectImports(rootNode, globalsUrl));
+  }
+  const newRelative = pagesShellToAppRootPath(relative);
+  const target = resolveRenameTarget(root, newRelative);
+  ensureParentDir(target);
+  const oldAbsPath = getFilename(root);
+  let out = rootNode.commitEdits(edits);
+  out = stripAppWithTranslationImport(out);
+  const cfg = readResolvedI18nConfig(inferCodemodTargetDir(getFilename(root)));
+  if (cfg) {
+    out = patchNextI18NextDirAttribute(out, cfg);
+  }
+  root.rename(target);
+  pruneEmptyAncestorsAfterRename(oldAbsPath);
+  return out;
+}
+
+function stripAppWithTranslationImport(source: string): string {
+  return source.replace(
+    /^\s*import\s+\{\s*appWithTranslation\s*\}\s+from\s+["']next-i18next["']\s*;?\s*\r?\n?/m,
+    "",
+  );
+}
+
+/**
+ * `dir={pageProps._nextI18Next?.initialLocale === …}` → pathname-derived locale
+ * (Next.js default locale is omitted from the URL; one other locale is usually prefixed).
+ */
+function patchNextI18NextDirAttribute(
+  source: string,
+  cfg: NextI18nCodemodConfig,
+): string {
+  const nonDefault = cfg.locales.find((l) => l !== cfg.defaultLocale);
+  if (!nonDefault) return source;
+  return source.replace(
+    /dir=\{\s*pageProps\._nextI18Next\?\.\s*initialLocale\s*===\s*["']([^"']+)["']\s*\?\s*["']([^"']+)["']\s*:\s*["']([^"']+)["']\s*\}/g,
+    (_, ifLocale, thenDir, elseDir) => {
+      return (
+        `dir={(() => {\n` +
+        `  const p = typeof window === "undefined" ? "" : (window.location.pathname.split("/").filter(Boolean)[0] ?? "");\n` +
+        `  const locale = p === ${JSON.stringify(nonDefault)} ? ${JSON.stringify(nonDefault)} : ${JSON.stringify(cfg.defaultLocale)};\n` +
+        `  return locale === ${JSON.stringify(ifLocale)} ? ${JSON.stringify(thenDir)} : ${JSON.stringify(elseDir)};\n` +
+        `})()}`
+      );
+    },
+  );
 }
 
 function emitTodo(rootNode: SgNode<TSX>, defaultExport: SgNode<TSX>): string {

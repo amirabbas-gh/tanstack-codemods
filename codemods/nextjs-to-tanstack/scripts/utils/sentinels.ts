@@ -3,15 +3,15 @@
  * of the way automatically. Tier 1 prefixes lines where the AST transform was
  * applied but semantics may still need a human once-over; Tier 2 covers cases
  * where we bail on an unsafe rewrite. Both tiers share searchable prefixes so
- * you can skim the codebase after a run (`rg 'TanStack migration note:'`).
+ * you can skim the codebase after a run (`rg '// TODO:'`).
  */
 
 import type { Edit, SgNode, TypesMap } from "codemod:ast-grep";
 
 /** Public so entry scripts can build aligned single-line prefixes. */
-export const REVIEW_PREFIX = "// TanStack migration note: ";
+export const REVIEW_PREFIX = "// TODO: ";
 
-export const TODO_PREFIX = "// TanStack migration note: ";
+export const TODO_PREFIX = "// TODO: ";
 
 type AnyNode = SgNode<TypesMap>;
 

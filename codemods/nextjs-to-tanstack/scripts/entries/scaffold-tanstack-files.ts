@@ -3,14 +3,15 @@
  *
  * Triggers off `package.json`; only packages that declare a `next` dependency
  * are scaffolded (safe for monorepos where the workflow includes `** /package.json`).
- * From inside the transform, writes `vite.config.ts` and `router.tsx` using the
- * sandboxed `fs` module — but only when the files don't already exist, so the
+ * From inside the transform, writes `vite.config.ts`, `router.tsx`, and a
+ * `routeTree.gen.ts` TypeScript stub (until Vite regenerates it) using the
+ * sandboxed `fs` module — but only when each file doesn't already exist, so the
  * step is idempotent.
  *
  * Layout:
- *   • `src/app/**` (classic create-next-app `--src-dir`): `srcDirectory: 'src'`,
+ *   • `src/app/**` or `src/pages/**` (classic create-next-app): `srcDirectory: 'src'`,
  *     router at `src/router.tsx`.
- *   • `app/` at package root without `src/app` (many monorepos): `srcDirectory: '.'`,
+ *   • `app/` or `pages/` at package root without `src/`: `srcDirectory: '.'`,
  *     router at `router.tsx`.
  *
  * The package.json content itself is not modified here (R11 handles that);
@@ -19,9 +20,16 @@
 
 import type { Codemod } from "codemod:ast-grep";
 import type JSON_TYPES from "codemod:ast-grep/langs/json";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { getFilename } from "../utils/paths.ts";
+import { hasSrcAppOrPages } from "../utils/has-src-app-or-pages.ts";
+import {
+  emitWorkflowStepReport,
+  WORKFLOW_NODE_IDS,
+} from "../utils/migration-run-report.ts";
+import { getFilename, normalizePath } from "../utils/paths.ts";
+import { readNextI18nConfig } from "../utils/read-next-i18n-config.ts";
+import { writeI18nBootstrapIfAbsent } from "../utils/write-i18n-bootstrap.ts";
 
 /** Local type only — do not name `PackageJson` (merges with patch-package-json.ts in the toolchain). */
 type NextPackageManifest = {
@@ -40,6 +48,16 @@ export function getRouter() {
 
   return router
 }
+`;
+
+/** Satisfies tsserver before the first Vite run; TanStack overwrites this during dev/build. */
+const ROUTE_TREE_GEN_STUB = `/**
+ * Placeholder for TypeScript until \`vite dev\` or \`vite build\` runs.
+ * @tanstack/react-start regenerates this file during the Vite build.
+ */
+import type { AnyRoute } from '@tanstack/react-router'
+
+export const routeTree = null as unknown as AnyRoute
 `;
 
 const VITE_CONFIG_SRC_APP = `import { defineConfig } from 'vite'
@@ -96,14 +114,6 @@ export default defineConfig({
 })
 `;
 
-function hasSrcApp(repoRoot: string): boolean {
-  try {
-    return statSync(join(repoRoot, "src", "app")).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
 const codemod: Codemod<JSON_TYPES> = async (root) => {
   const file = getFilename(root);
   if (!file.endsWith("/package.json") && !file.endsWith("package.json")) {
@@ -122,16 +132,50 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
     return null;
   }
 
-  const useSrcApp = hasSrcApp(repoRoot);
+  const useSrcApp = hasSrcAppOrPages(repoRoot);
 
   writeIfAbsent(
     join(repoRoot, "vite.config.ts"),
     useSrcApp ? VITE_CONFIG_SRC_APP : VITE_CONFIG_ROOT_APP,
   );
-  writeIfAbsent(
-    useSrcApp ? join(repoRoot, "src", "router.tsx") : join(repoRoot, "router.tsx"),
-    ROUTER_FILE,
-  );
+  const routerPath = useSrcApp
+    ? join(repoRoot, "src", "router.tsx")
+    : join(repoRoot, "router.tsx");
+  writeIfAbsent(routerPath, ROUTER_FILE);
+  const routeGenPath = useSrcApp
+    ? join(repoRoot, "src", "routeTree.gen.ts")
+    : join(repoRoot, "routeTree.gen.ts");
+  writeIfAbsent(routeGenPath, ROUTE_TREE_GEN_STUB);
+
+  const i18n = readNextI18nConfig(repoRoot);
+  if (i18n) {
+    const codemodDir = join(repoRoot, ".codemod");
+    mkdirSync(codemodDir, { recursive: true });
+    writeFileSync(
+      join(codemodDir, "i18n.json"),
+      `${JSON.stringify(
+        {
+          source: "next-i18n",
+          defaultLocale: i18n.defaultLocale,
+          locales: i18n.locales,
+          tanstackOptionalLocaleSegment: "{-$locale}",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    writeI18nBootstrapIfAbsent(repoRoot, i18n, useSrcApp);
+  }
+
+  emitWorkflowStepReport({
+    step: WORKFLOW_NODE_IDS.scaffoldTanstackFiles,
+    packageRoot: normalizePath(repoRoot),
+    usedSrcLayout: useSrcApp,
+    i18nFromNextConfig: i18n
+      ? { defaultLocale: i18n.defaultLocale, locales: i18n.locales }
+      : null,
+  });
+
   return null;
 };
 

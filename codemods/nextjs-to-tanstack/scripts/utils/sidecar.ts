@@ -21,10 +21,15 @@ export interface FontEntry {
   importSource: "next/font/google" | "next/font/local";
   /** Display name, e.g. "Inter". For `next/font/local` this is the binding name. */
   family: string;
-  /** kebab-cased family used for `@fontsource-variable/<packageKey>`. */
+  /** kebab-cased family used for `@fontsource-variable/<packageKey>` (Google only). */
   packageKey: string;
   /** Variable option supplied to the Next helper, e.g. "--font-sans". */
   variable: string | null;
+}
+
+/** Only `next/font/google` families are published as `@fontsource-variable/*` on npm. */
+export function hasFontsourcePackage(font: FontEntry): boolean {
+  return font.importSource === "next/font/google";
 }
 
 export interface SidecarState {

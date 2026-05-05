@@ -1,0 +1,7 @@
+{
+  "name": "fixture",
+  "private": true,
+  "dependencies": {
+    "@tanstack/react-start": "1.0.0"
+  }
+}

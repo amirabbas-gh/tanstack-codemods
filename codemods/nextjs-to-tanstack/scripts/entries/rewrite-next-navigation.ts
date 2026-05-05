@@ -2,9 +2,13 @@
  * Rewrites `next/navigation` client hooks to `@tanstack/react-router` where
  * there is a safe 1:1 mapping (ported from `/Users/amir/Desktop/codemod/next2tanstack`).
  *
+ * - `useRouter` → `@tanstack/react-router` (same name).
  * - `usePathname` → `useLocation` + call sites `usePathname()` → `useLocation().pathname`
  * - `useSearchParams` → `useSearch` + `useSearchParams()` → `useSearch()`
- * - `useRouter` / `notFound` keep working; unknown named imports remain on `next/navigation`.
+ * - `useParams` → same identifier from `@tanstack/react-router` **only** when this module
+ *   already defines a file route (`createFileRoute` / `createLazyFileRoute` call), so shared
+ *   libraries keep importing `next/navigation` until manually migrated.
+ * - Other named imports stay on `next/navigation` (no behaviour change).
  */
 
 import type { Codemod, Edit } from "codemod:ast-grep";
@@ -16,6 +20,17 @@ const TANSTACK = "@tanstack/react-router";
 const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
+  const allowUseParamsFromTanStack =
+    rootNode.find({
+      rule: {
+        kind: "call_expression",
+        has: {
+          field: "function",
+          kind: "identifier",
+          regex: "^(createFileRoute|createLazyFileRoute)$",
+        },
+      },
+    }) !== null;
 
   const importStmts = rootNode.findAll({
     rule: {
@@ -58,6 +73,14 @@ const codemod: Codemod<TSX> = async (root) => {
         needsUseSearch = true;
         continue;
       }
+      if (/^useParams\b/.test(s)) {
+        if (allowUseParamsFromTanStack) {
+          tanstackFromStmt.push(s);
+          continue;
+        }
+        keepNext.push(s);
+        continue;
+      }
 
       keepNext.push(s);
     }
@@ -75,6 +98,7 @@ const codemod: Codemod<TSX> = async (root) => {
 
     const inserted =
       replacementLines.length > 0 ? `${replacementLines.join("\n")}\n` : "";
+    if (inserted.replace(/\s+$/, "") === text.replace(/\s+$/, "")) continue;
     edits.push({
       startPos: stmt.range().start.index,
       endPos: stmt.range().end.index,

@@ -1,15 +1,25 @@
 {
   "name": "with-next-auth",
   "version": "0.0.0",
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
+    "dev": "vite dev",
+    "build": "vite build",
+    "start": "node .output/server/index.mjs"
   },
   "dependencies": {
-    "next": "^15.0.0",
     "next-auth": "^4.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-start": "latest",
+    "vite": "latest",
+    "@vitejs/plugin-react": "latest",
+    "nitro": "latest",
+    "@unpic/react": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "latest",
+    "tailwindcss": "latest"
   }
 }

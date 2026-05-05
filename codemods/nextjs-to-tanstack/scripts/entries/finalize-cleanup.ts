@@ -1,10 +1,8 @@
 /**
  * Replacement for the finalize-cleanup shell node.
  *
- * Removes `.codemod/state.json` after every patching step has consumed it.
- * Anchored to `package.json` so the trigger is stable, and conservative:
- * it only unlinks the specific sidecar file to avoid reaching beyond the
- * codemod's own scratch area.
+ * Removes `.codemod/state.json` after font-related steps consume it.
+ * Does not delete `.codemod/i18n.json` (optional-locale migration metadata).
  */
 
 import type { Codemod } from "codemod:ast-grep";
@@ -22,7 +20,7 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
   const repoRoot = dirname(file);
   const stateDir = join(repoRoot, ".codemod");
   try {
-    rmSync(stateDir, { recursive: true, force: true });
+    rmSync(join(stateDir, "state.json"), { force: true });
   } catch {
     // Already absent — fine.
   }

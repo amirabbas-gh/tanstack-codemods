@@ -11,6 +11,12 @@
       "family": "DM_Sans",
       "packageKey": "dm-sans",
       "variable": null
+    },
+    {
+      "importSource": "next/font/local",
+      "family": "calSans",
+      "packageKey": "cal-sans",
+      "variable": "--font-cal"
     }
   ]
 }
