@@ -21,16 +21,35 @@ export interface HeadBuildResult {
   bail: boolean;
 }
 
+/** Parsed `meta` / `links` arrays before formatting into a `head()` option. */
+export interface HeadParts {
+  metaItems: string[];
+  linkItems: string[];
+  unmapped: string[];
+}
+
+export function composeHeadOption(metaItems: string[], linkItems: string[]): string {
+  const linesOut: string[] = [];
+  linesOut.push("head: () => ({");
+  if (metaItems.length > 0) {
+    linesOut.push(`  meta: [${metaItems.join(", ")}],`);
+  }
+  if (linkItems.length > 0) {
+    linesOut.push(`  links: [${linkItems.join(", ")}],`);
+  }
+  linesOut.push("})");
+  return linesOut.join("\n");
+}
+
 /**
- * Build a `head()` option string from a metadata object AST node. The caller
- * is expected to have already verified that the node is an `object`.
+ * Collect TanStack `meta` / `links` entries from a Next.js `metadata` object.
  */
-export function metadataObjectToHead<T extends TypesMap>(
+export function metadataObjectToHeadParts<T extends TypesMap>(
   objTyped: SgNode<T>,
-): HeadBuildResult {
+): HeadParts {
   const objNode = objTyped as unknown as AnyNode;
-  const metas: string[] = [];
-  const links: string[] = [];
+  const metaItems: string[] = [];
+  const linkItems: string[] = [];
   const unmapped: string[] = [];
 
   for (const pair of objNode.findAll({ rule: { kind: "pair" } })) {
@@ -46,21 +65,21 @@ export function metadataObjectToHead<T extends TypesMap>(
       case "title": {
         const str = readStringLiteral(value);
         if (str !== null) {
-          metas.push(`{ title: ${JSON.stringify(str)} }`);
+          metaItems.push(`{ title: ${JSON.stringify(str)} }`);
         } else {
-          metas.push(`{ title: ${value.text()} }`);
+          metaItems.push(`{ title: ${value.text()} }`);
           unmapped.push("title (non-literal value)");
         }
         break;
       }
       case "description": {
-        pushMeta(metas, "name", "description", value, unmapped, "description");
+        pushMeta(metaItems, "name", "description", value, unmapped, "description");
         break;
       }
       case "keywords": {
         const items = readStringArray(value);
         if (items !== null) {
-          metas.push(
+          metaItems.push(
             `{ name: "keywords", content: ${JSON.stringify(items.join(","))} }`,
           );
         } else {
@@ -71,7 +90,7 @@ export function metadataObjectToHead<T extends TypesMap>(
       case "authors":
       case "creator":
       case "publisher": {
-        pushMeta(metas, "name", key, value, unmapped, key);
+        pushMeta(metaItems, "name", key, value, unmapped, key);
         break;
       }
       case "openGraph": {
@@ -79,7 +98,7 @@ export function metadataObjectToHead<T extends TypesMap>(
           unmapped.push("openGraph (non-object)");
           break;
         }
-        collectNested(value, "og:", metas, unmapped);
+        collectNested(value, "og:", metaItems, unmapped);
         break;
       }
       case "twitter": {
@@ -87,11 +106,11 @@ export function metadataObjectToHead<T extends TypesMap>(
           unmapped.push("twitter (non-object)");
           break;
         }
-        collectNested(value, "twitter:", metas, unmapped);
+        collectNested(value, "twitter:", metaItems, unmapped);
         break;
       }
       case "icons": {
-        collectIcons(value, links, unmapped);
+        collectIcons(value, linkItems, unmapped);
         break;
       }
       default: {
@@ -100,19 +119,20 @@ export function metadataObjectToHead<T extends TypesMap>(
     }
   }
 
-  const linesOut: string[] = [];
-  linesOut.push("head: () => ({");
-  if (metas.length > 0) {
-    linesOut.push(`  meta: [${metas.join(", ")}],`);
-  }
-  if (links.length > 0) {
-    linesOut.push(`  links: [${links.join(", ")}],`);
-  }
-  linesOut.push("})");
+  return { metaItems, linkItems, unmapped };
+}
 
+/**
+ * Build a `head()` option string from a metadata object AST node. The caller
+ * is expected to have already verified that the node is an `object`.
+ */
+export function metadataObjectToHead<T extends TypesMap>(
+  objTyped: SgNode<T>,
+): HeadBuildResult {
+  const parts = metadataObjectToHeadParts(objTyped);
   return {
-    headOption: linesOut.join("\n"),
-    unmapped,
+    headOption: composeHeadOption(parts.metaItems, parts.linkItems),
+    unmapped: parts.unmapped,
     bail: false,
   };
 }
@@ -183,7 +203,7 @@ function pushMeta(
 function collectNested(
   objNode: AnyNode,
   prefix: string,
-  metas: string[],
+  metaItems: string[],
   unmapped: string[],
 ): void {
   const attr = prefix === "og:" ? ("property" as const) : ("name" as const);
@@ -197,14 +217,14 @@ function collectNested(
       const arr = readStringArray(value);
       if (arr !== null) {
         for (const img of arr) {
-          metas.push(
+          metaItems.push(
             `{ ${attr}: ${JSON.stringify(`${prefix}image`)}, content: ${JSON.stringify(img)} }`,
           );
         }
       } else {
         const single = readStringLiteral(value);
         if (single !== null) {
-          metas.push(
+          metaItems.push(
             `{ ${attr}: ${JSON.stringify(`${prefix}image`)}, content: ${JSON.stringify(single)} }`,
           );
         } else {
@@ -213,7 +233,7 @@ function collectNested(
       }
       continue;
     }
-    pushMeta(metas, attr, `${prefix}${key}`, value, unmapped, `${prefix}${key}`);
+    pushMeta(metaItems, attr, `${prefix}${key}`, value, unmapped, `${prefix}${key}`);
   }
 }
 

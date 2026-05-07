@@ -26,10 +26,11 @@ const codemod: Codemod<TSX> = async (root) => {
   const next = applyStripNextPagesDataPipeline(source);
   if (next === source) return null;
 
+  const { start, end } = rootNode.range();
   return rootNode.commitEdits([
     {
-      startPos: 0,
-      endPos: source.length,
+      startPos: start.index,
+      endPos: end.index,
       insertedText: next,
     },
   ]);

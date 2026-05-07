@@ -3,8 +3,9 @@
  *
  * Triggers off `package.json`; only packages that declare a `next` dependency
  * are scaffolded (safe for monorepos where the workflow includes `** /package.json`).
- * From inside the transform, writes `vite.config.ts`, `router.tsx`, and a
- * `routeTree.gen.ts` TypeScript stub (until Vite regenerates it) using the
+ * From inside the transform, writes `vite.config.ts`, `router.tsx`, a
+ * `routeTree.gen.ts` TypeScript stub (until Vite regenerates it), and a starter
+ * `query-client.ts` for TanStack Query, using the
  * sandboxed `fs` module — but only when each file doesn't already exist, so the
  * step is idempotent.
  *
@@ -51,6 +52,62 @@ export function getRouter() {
 `;
 
 /** Satisfies tsserver before the first Vite run; TanStack overwrites this during dev/build. */
+const QUERY_CLIENT_SRC = `import { QueryClient } from '@tanstack/react-query'
+
+/**
+ * Shared singleton for client + server invalidation after migrating \`next/cache\`.
+ * Wire the same instance through your router root / TanStack Query provider.
+ */
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60_000,
+    },
+  },
+})
+`;
+
+const NEXT_HEADERS_BRIDGE_SRC = `/**
+ * Helpers after migrating from \`next/headers\` — pass each Web \`Request\` explicitly
+ * (TanStack Router \`createRouter\` context, server handlers, Nitro).
+ */
+export function readCookieValue(cookieHeader: string | null | undefined, name: string): string | undefined {
+  if (!cookieHeader) return undefined
+  for (const segment of cookieHeader.split(';')) {
+    const piece = segment.trim()
+    if (!piece) continue
+    const eq = piece.indexOf('=')
+    const key = (eq === -1 ? piece : piece.slice(0, eq)).trim()
+    const raw = eq === -1 ? '' : piece.slice(eq + 1).trim()
+    if (key !== name) continue
+    try {
+      return decodeURIComponent(raw)
+    } catch {
+      return raw
+    }
+  }
+  return undefined
+}
+
+export function getCookieFromRequest(
+  request: Request | undefined | null,
+  name: string,
+): { name: string; value: string } | undefined {
+  if (!request) return undefined
+  const v = readCookieValue(request.headers.get('cookie'), name)
+  if (v === undefined) return undefined
+  return { name, value: v }
+}
+
+export function readRequestHeader(
+  request: Request | undefined | null,
+  headerName: string,
+): string | null {
+  if (!request) return null
+  return request.headers.get(headerName)
+}
+`;
+
 const ROUTE_TREE_GEN_STUB = `/**
  * Placeholder for TypeScript until \`vite dev\` or \`vite build\` runs.
  * @tanstack/react-start regenerates this file during the Vite build.
@@ -146,6 +203,16 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
     ? join(repoRoot, "src", "routeTree.gen.ts")
     : join(repoRoot, "routeTree.gen.ts");
   writeIfAbsent(routeGenPath, ROUTE_TREE_GEN_STUB);
+
+  const queryClientPath = useSrcApp
+    ? join(repoRoot, "src", "query-client.ts")
+    : join(repoRoot, "query-client.ts");
+  writeIfAbsent(queryClientPath, QUERY_CLIENT_SRC);
+
+  const headersBridgePath = useSrcApp
+    ? join(repoRoot, "src", "next-headers-bridge.ts")
+    : join(repoRoot, "next-headers-bridge.ts");
+  writeIfAbsent(headersBridgePath, NEXT_HEADERS_BRIDGE_SRC);
 
   const i18n = readNextI18nConfig(repoRoot);
   if (i18n) {

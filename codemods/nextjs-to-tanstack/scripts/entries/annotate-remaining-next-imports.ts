@@ -100,22 +100,38 @@ function todoForNextSpecifier(from: string): { message: string; docUrl?: string 
   const serverRoutes =
     "https://tanstack.com/start/latest/docs/framework/react/guide/server-routes";
 
-  if (from === "next/headers" || from === "next/cookies" || from === "next/response") {
+  if (from === "next/headers") {
     return {
-      message: `replace \`${from}\` with TanStack Start server APIs, standard Request/Response, or server functions`,
+      message:
+        "remaining `next/headers` usage was not auto-ported (e.g. `draftMode`, `cookies().set`, `headers()` without `.get`) — wire Web `Request` from TanStack Router / Start context or server handlers",
+      docUrl: "https://tanstack.com/router/latest/docs/framework/react/guide/router-context",
+    };
+  }
+  if (from === "next/cookies" || from === "next/response") {
+    return {
+      message: `replace \`${from}\` with Web Request/Response patterns or TanStack Start server routes`,
       docUrl: serverRoutes,
     };
   }
   if (from === "next/server") {
     return {
-      message: "replace `next/server` utilities (NextRequest/NextResponse/etc.) with web standards or Start server patterns",
+      message:
+        "remaining `next/server` imports (`userAgent`, `after`, middleware-only `NextResponse` helpers, etc.) — complete the port to Web APIs and TanStack Start server routes",
       docUrl: serverRoutes,
+    };
+  }
+  if (from === "next/og") {
+    return {
+      message:
+        "remaining `next/og` usage beyond the import rewrite — `@vercel/og` is added in package.json; align with Vercel OG runtime on Nitro/Vite",
+      docUrl: "https://vercel.com/docs/functions/og-image-generation",
     };
   }
   if (from === "next/cache") {
     return {
-      message: "replace `next/cache` (revalidatePath, unstable_cache, …) with a caching strategy that fits your host and TanStack Start",
-      docUrl: "https://tanstack.com/start/latest/docs/framework/react/guide/server-functions",
+      message:
+        "remaining `next/cache` usage was not fully auto-ported — finish with TanStack Query (useQuery/useMutation + query keys) per https://tanstack.com/query/latest/docs/framework/react/overview",
+      docUrl: "https://tanstack.com/query/latest/docs/framework/react/guides/query-invalidation",
     };
   }
   if (from === "next/dynamic") {
@@ -138,7 +154,14 @@ function todoForNextSpecifier(from: string): { message: string; docUrl?: string 
       docUrl: "https://tanstack.com/start/latest/docs/framework/react/migrate-from-next-js",
     };
   }
-  if (from === "next/navigation" || from === "next/link" || from === "next/image" || from === "next/router") {
+  if (from === "next/navigation") {
+    return {
+      message:
+        "remaining `next/navigation` usage was not auto-ported (e.g. `notFound`, `useSelectedLayoutSegments`, `router.prefetch`, multi-arg `redirect`, or redirects in components) — move auth to route loaders when possible",
+      docUrl: "https://tanstack.com/router/latest/docs/framework/react/guide/navigation",
+    };
+  }
+  if (from === "next/link" || from === "next/image" || from === "next/router") {
     return {
       message: `this \`${from}\` import survived the codemod — port to @tanstack/react-router or unpic manually`,
       docUrl: "https://tanstack.com/router/latest/docs/framework/react/routing/routing-concepts",

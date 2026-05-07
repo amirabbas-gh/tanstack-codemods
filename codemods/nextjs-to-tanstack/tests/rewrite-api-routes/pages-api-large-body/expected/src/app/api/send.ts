@@ -1,4 +1,4 @@
-import nodemailer from 'nodemailer'
+import nodemailer from 'nodemailer';
 
 import { createFileRoute } from "@tanstack/react-router";
 

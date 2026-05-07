@@ -8,5 +8,10 @@
     "types": [
       "vite/client"
     ]
-  }
+  },
+  "exclude": [
+    "migrated-from-pages",
+    "**/migrated-from-pages/**",
+    "**/migrated-from-pages-*/**"
+  ]
 }

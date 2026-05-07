@@ -45,6 +45,8 @@ interface PackageJson {
 }
 
 const RUNTIME_DEPS: Array<[string, string]> = [
+  /** Emitted by scaffold `query-client.ts` and `rewrite-next-cache` invalidation imports. */
+  ["@tanstack/react-query", "latest"],
   ["@tanstack/react-router", "latest"],
   ["@tanstack/react-start", "latest"],
   ["vite", "latest"],
@@ -149,10 +151,11 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
 
   emitReport(true);
 
+  const { start, end } = rootNode.range();
   return rootNode.commitEdits([
     {
-      startPos: 0,
-      endPos: source.length,
+      startPos: start.index,
+      endPos: end.index,
       insertedText: serialised,
     },
   ]);

@@ -13,8 +13,16 @@ import { readFileSync, readdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { getFilename } from "../utils/paths.ts";
 
+/** Leftover `pages/` backups from R14 — not typecheck targets. */
+const MIGRATION_TS_EXCLUDES = [
+  "migrated-from-pages",
+  "**/migrated-from-pages/**",
+  "**/migrated-from-pages-*/**",
+] as const;
+
 interface TsConfig {
   compilerOptions?: Record<string, unknown>;
+  exclude?: string[];
   [key: string]: unknown;
 }
 
@@ -103,8 +111,19 @@ function patchTsconfig(path: string): void {
     if (!list.includes("vite/client")) coerce.types = [...list, "vite/client"];
   }
 
+  mergeMigrationTsExcludes(cfg);
+
   if (JSON.stringify(cfg) === before) return;
   writeFileSync(path, `${JSON.stringify(cfg, null, 2)}\n`);
+}
+
+function mergeMigrationTsExcludes(cfg: TsConfig): void {
+  const raw = cfg.exclude;
+  const cur = Array.isArray(raw) ? raw.map(String) : [];
+  for (const p of MIGRATION_TS_EXCLUDES) {
+    if (!cur.includes(p)) cur.push(p);
+  }
+  cfg.exclude = cur;
 }
 
 function patchEslintrcJson(path: string): void {

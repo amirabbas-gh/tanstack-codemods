@@ -17,8 +17,12 @@ const codemod: Codemod<TSX> = async (root) => {
     applyNextI18nextToReactI18nextModuleRewrites(source),
   );
   if (next === source) return null;
+  // Use the parser root span, not `source.length`. With non-ASCII source,
+  // tree-sitter byte ranges can diverge from JS string indices; a full-buffer
+  // replace using `.length` corrupts files when applying edits (garbled tails).
+  const { start, end } = rootNode.range();
   return rootNode.commitEdits([
-    { startPos: 0, endPos: source.length, insertedText: next },
+    { startPos: start.index, endPos: end.index, insertedText: next },
   ]);
 };
 

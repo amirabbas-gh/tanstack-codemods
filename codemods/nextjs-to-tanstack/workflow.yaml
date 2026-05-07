@@ -202,11 +202,11 @@ nodes:
           exclude: *shared-excludes
 
   - id: rewrite-metadata
-    name: R7 — Convert `export const metadata` to head() config
+    name: R7 — Convert `metadata` / `viewport` exports to head() config
     type: automatic
     depends_on: [rewrite-dynamic-params]
     steps:
-      - name: Map metadata fields to head() entries
+      - name: Map metadata + viewport fields to head() meta / links
         js-ast-grep:
           js_file: scripts/entries/rewrite-metadata.ts
           language: tsx
@@ -258,11 +258,11 @@ nodes:
           exclude: *shared-excludes
 
   - id: rewrite-next-navigation
-    name: R4b — next/navigation hooks → TanStack Router
+    name: R4b — next/navigation → TanStack Router (hooks, redirect, useRouter → useNavigate)
     type: automatic
     depends_on: [rewrite-link-image]
     steps:
-      - name: Migrate usePathname / useSearchParams / useRouter imports
+      - name: usePathname / useSearchParams / useRouter · redirect / permanentRedirect · inline push|replace
         js-ast-grep:
           js_file: scripts/entries/rewrite-next-navigation.ts
           language: tsx
@@ -293,10 +293,58 @@ nodes:
           include: *cross-cutting-ts
           exclude: *shared-excludes
 
+  - id: rewrite-next-cache
+    name: R4e — next/cache → TanStack Query (invalidateQueries / unwrap unstable_cache)
+    type: automatic
+    depends_on: [rewrite-next-i18next-imports]
+    steps:
+      - name: revalidateTag · revalidatePath → queryClient.invalidateQueries; strip unstable_noStore
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-next-cache.ts
+          language: tsx
+          include: *cross-cutting-ts
+          exclude: *shared-excludes
+
+  - id: rewrite-next-headers
+    name: R4f — next/headers cookies/headers → Request helpers + bridge import
+    type: automatic
+    depends_on: [rewrite-next-cache]
+    steps:
+      - name: cookies().get / headers().get → getCookieFromRequest / readRequestHeader
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-next-headers.ts
+          language: tsx
+          include: *cross-cutting-ts
+          exclude: *shared-excludes
+
+  - id: rewrite-next-server
+    name: R4h — next/server NextRequest/NextResponse → Request/Response (Fetch)
+    type: automatic
+    depends_on: [rewrite-next-headers]
+    steps:
+      - name: Trim next/server imports; rename identifiers (skip next/rewrite middleware-only)
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-next-server.ts
+          language: tsx
+          include: *cross-cutting-ts
+          exclude: *shared-excludes
+
+  - id: rewrite-next-og
+    name: R4i — next/og → @vercel/og
+    type: automatic
+    depends_on: [rewrite-next-server]
+    steps:
+      - name: Point OG imports at @vercel/og (package added in R11)
+        js-ast-grep:
+          js_file: scripts/entries/rewrite-next-og.ts
+          language: tsx
+          include: *cross-cutting-ts
+          exclude: *shared-excludes
+
   - id: annotate-async-pages
     name: R10 — TODO for async route components still awaiting at render
     type: automatic
-    depends_on: [rewrite-next-i18next-imports]
+    depends_on: [rewrite-next-og]
     steps:
       - name: Insert migration note when createFileRoute components use top-level await
         js-ast-grep:

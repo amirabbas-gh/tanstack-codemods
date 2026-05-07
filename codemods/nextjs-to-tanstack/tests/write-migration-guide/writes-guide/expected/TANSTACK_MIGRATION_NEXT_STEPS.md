@@ -9,6 +9,7 @@ When this package had Next.js `i18n` (often via `next-i18next.config.*`), routes
 - If **`.codemod/i18n.json`** exists, it lists the locales the codemod detected. The workflow also emits **`src/i18n.ts`** (when absent) and wraps **`__root.tsx`** with **`I18nextProvider`**, and preloads **`import "./i18n"`** from **`router.tsx`** so **`react-i18next`** receives a real **`i18next`** instance (replacing **`next-i18next`** / `serverSideTranslations`).
 - Wire **`react-i18next`** / **Paraglide** to the active locale (often `Route.useParams().locale` or router `rewrite` for URL localization — see the same doc and the [Paraglide + TanStack](https://github.com/TanStack/router/tree/main/examples/react/i18n-paraglide) example).
 - Internal **`Link to="…"`** paths may need `params` updates so the optional `locale` is preserved when switching languages.
+- **Strict TypeScript** — `Link to={...}` literals often break after routes move under `/{-$locale}/…`: internal paths must match the generated route union (`params`, `from`/validated `to`), or temporarily wrap/replace `Link` until every href matches the router tree (`vite dev`/build regenerates types).
 
 ## 1. In-repo TODO markers (start here)
 
@@ -20,6 +21,15 @@ rg '// TODO:'
 
 - **R10** — `// TODO: … Route.loader …` before `createFileRoute` components that still use **top-level `await`** (move data into `Route.loader` or server functions).
 - **R10b** — the same `// TODO:` prefix **immediately before each surviving `from "next/…"` import**, plus one file-level note for **`middleware.ts` / `middleware.tsx`** when it still imports from Next.
+- **R4e** (`next/cache`) — a banner `// TODO:` (search `(R4e)`) marks files where the codemod replaced `next/cache`; finalize TanStack Query: `queryClient` + `QueryClientProvider` (or app root wiring), consistent `invalidateQueries` / `useQuery` keys, and `unstable_cache` / `unstable_noStore` semantics via `staleTime`, `gcTime`, refetch — [invalidation guide](https://tanstack.com/query/latest/docs/framework/react/guides/query-invalidation), [overview](https://tanstack.com/query/latest/docs/framework/react/overview).
+
+- **R4f** (`next/headers`) — a banner `// TODO:` (search `(R4f)`) when `cookies().get` / `headers().get` were rewritten via `next-headers-bridge.ts`; still pass a real `Request` instead of `undefined`, and handle any survivors (`draftMode`, cookie writes, bare `headers()`) manually — [router context](https://tanstack.com/router/latest/docs/framework/react/guide/router-context).
+
+- **R4g** (`next/navigation`) — a banner `// TODO:` (search `(R4g)`) when `redirect` / `useRouter` patterns were rewritten; must `throw redirect()` in loaders/beforeLoad, use `useNavigate()` on the client — [navigation guide](https://tanstack.com/router/latest/docs/framework/react/guide/navigation).
+
+- **R4h** (`next/server`) — a banner `// TODO:` (search `(R4h)`) when `NextRequest`/`NextResponse` were mapped to Fetch `Request`/`Response`; port any remaining helpers (`after`, `connection`, `NextResponse.next`, etc.) to TanStack server routes — [server routes](https://tanstack.com/start/latest/docs/framework/react/guide/server-routes).
+
+- **R4i** (`next/og`) — imports are pointed at `@vercel/og` (dependency added in R11); verify runtime and any experimental OG APIs.
 
 Resolve or delete each marker as you port the code. Safe `next/dynamic` / external `next/script` patterns are already rewritten earlier in the workflow; anything left usually needs a manual decision.
 
@@ -64,6 +74,8 @@ Metric **`nextjs-to-tanstack-r10b-next-import`** (CLI + below):
 
 ## Reference links
 
+- [TanStack Query — overview](https://tanstack.com/query/latest/docs/framework/react/overview)
+- [TanStack Query — invalidation](https://tanstack.com/query/latest/docs/framework/react/guides/query-invalidation)
 - [TanStack Router — routing](https://tanstack.com/router/latest/docs/framework/react/routing/routing-concepts)
 - [Server routes](https://tanstack.com/start/latest/docs/framework/react/guide/server-routes)
 - [Server functions](https://tanstack.com/start/latest/docs/framework/react/guide/server-functions)

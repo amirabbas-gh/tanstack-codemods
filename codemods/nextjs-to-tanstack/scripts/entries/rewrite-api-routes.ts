@@ -394,8 +394,9 @@ function tryMigrateDefaultExportPagesApi(
   const newPath = resolveRenameTarget(root, routeInfo.newPath);
   ensureParentDir(newPath);
   const oldAbsPath = getFilename(root);
+  const { start, end } = rootNode.range();
   const out = rootNode.commitEdits([
-    { startPos: 0, endPos: source.length, insertedText: newFile },
+    { startPos: start.index, endPos: end.index, insertedText: newFile },
   ]);
   root.rename(newPath);
   pruneEmptyAncestorsAfterRename(oldAbsPath);
