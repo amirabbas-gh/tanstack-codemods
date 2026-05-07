@@ -49,13 +49,13 @@ Resolve or delete each marker as you port the code. Safe `next/dynamic` / extern
 
 ## 4. Migration run summary
 
-Data from earlier workflow steps via `codemod:workflow` **state** (R10 / R10b totals), **step outputs** (`setStepOutput` / `getStepOutput`, key `report`), and **metrics** (same atoms as in the CLI; see `useMetricAtom` in the R10 and R10b transforms).
+Data from earlier workflow steps via `codemod:workflow` **state**: R10 / R10b totals and per-step reports (written with `acquireLock`, `setState`, `getState`), plus **metrics** (same atoms as in the CLI; see `useMetricAtom` in the R10 and R10b transforms).
 
 - **Package root (this manifest):** `.`
 
-### Step outputs (`report`)
+### Step reports (workflow state)
 
-*No earlier step outputs found (normal when only this script runs, or outputs were not written for this package).*
+*No step reports in workflow state for this package (normal when only this script runs, or earlier steps did not persist a report).*
 
 ### R10 — async route components (`// TODO: … Route.loader …` markers)
 

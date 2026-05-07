@@ -1,17 +1,11 @@
 /**
  * Collects per-package migration metadata for TANSTACK_MIGRATION_NEXT_STEPS.md:
  * - `codemod:workflow` persisted state (parallel-safe via `acquireLock`) for R10 / R10b
- * - `setStepOutput` / `getStepOutput` for single-file node summaries (`report` key)
+ * - same state API for per-step JSON summaries (`mtg:step-report:<pkg>:<stepId>` keys)
  * - pairs with `useMetricAtom` in R10 / R10b entry scripts (CLI + `getEntries()` in the guide)
  */
 
-import {
-  acquireLock,
-  getState,
-  getStepOutput,
-  setState,
-  setStepOutput,
-} from "codemod:workflow";
+import { acquireLock, getState, setState } from "codemod:workflow";
 import type { MetricAtom } from "codemod:metrics";
 import { inferCodemodTargetDir, normalizePath } from "./paths.ts";
 
@@ -32,6 +26,11 @@ export type R10bAccum = {
   middlewareTodoFiles: string[];
 };
 
+/** Normalized package root + step id — matches keys used by `emitWorkflowStepReport`. */
+export function workflowStepReportStateKey(packageRootNorm: string, stepId: string): string {
+  return `mtg:step-report:${normalizePath(packageRootNorm)}:${stepId}`;
+}
+
 function pkgKeyFromAbsFile(fileAbs: string): string {
   return normalizePath(inferCodemodTargetDir(fileAbs));
 }
@@ -43,7 +42,16 @@ export function relPathUnderPkg(fileAbs: string): string {
 }
 
 export function emitWorkflowStepReport(payload: unknown): void {
-  setStepOutput("report", JSON.stringify(payload));
+  if (!payload || typeof payload !== "object") return;
+  const { step, packageRoot } = payload as { step?: unknown; packageRoot?: unknown };
+  if (typeof step !== "string" || typeof packageRoot !== "string") return;
+  const key = workflowStepReportStateKey(packageRoot, step);
+  const release = acquireLock(`${key}:lock`);
+  try {
+    setState(key, payload, true);
+  } finally {
+    release();
+  }
 }
 
 export function bumpR10(fileAbs: string, todoMarkersAdded: number): void {
@@ -111,7 +119,10 @@ function formatMetricEntries(atom: MetricAtom): string {
     .join("\n");
 }
 
-function collectStepOutputSnapshots(): Array<{ stepId: string; label: string; raw: string | null }> {
+function collectStepReportSnapshots(
+  stateKeyRoot: string,
+): Array<{ stepId: string; label: string; raw: string | null }> {
+  const pkg = normalizePath(stateKeyRoot);
   const items: Array<{ stepId: string; label: string }> = [
     {
       stepId: WORKFLOW_NODE_IDS.scaffoldTanstackFiles,
@@ -130,34 +141,52 @@ function collectStepOutputSnapshots(): Array<{ stepId: string; label: string; ra
       label: "Root I18next provider (R14c)",
     },
   ];
-  return items.map(({ stepId, label }) => ({
-    stepId,
-    label,
-    raw: getStepOutput(stepId, "report"),
-  }));
+  return items.map(({ stepId, label }) => {
+    const key = workflowStepReportStateKey(pkg, stepId);
+    const release = acquireLock(`${key}:lock`);
+    try {
+      const val = getState<unknown>(key);
+      if (val == null) {
+        return { stepId, label, raw: null };
+      }
+      if (typeof val === "string") {
+        return { stepId, label, raw: val };
+      }
+      try {
+        return { stepId, label, raw: JSON.stringify(val, null, 2) };
+      } catch {
+        return { stepId, label, raw: String(val) };
+      }
+    } finally {
+      release();
+    }
+  });
 }
 
 export function buildMigrationRunSummarySection(params: {
+  /** Display path for the markdown (often relative to the workflow target). */
   packageRoot: string;
+  /** Normalized package directory; must match `packageRoot` passed into `emitWorkflowStepReport` for state keys. */
+  stateKeyRoot: string;
   r10: R10Accum | undefined;
   r10b: R10bAccum | undefined;
   r10Metric: MetricAtom;
   r10bMetric: MetricAtom;
 }): string {
-  const { packageRoot, r10, r10b, r10Metric, r10bMetric } = params;
-  const steps = collectStepOutputSnapshots();
+  const { packageRoot, stateKeyRoot, r10, r10b, r10Metric, r10bMetric } = params;
+  const steps = collectStepReportSnapshots(stateKeyRoot);
   const lines: string[] = [];
 
   lines.push("## 4. Migration run summary");
   lines.push("");
   lines.push(
-    "Data from earlier workflow steps via `codemod:workflow` **state** (R10 / R10b totals), **step outputs** (`setStepOutput` / `getStepOutput`, key `report`), and **metrics** (same atoms as in the CLI; see `useMetricAtom` in the R10 and R10b transforms).",
+    "Data from earlier workflow steps via `codemod:workflow` **state**: R10 / R10b totals and per-step reports (written with `acquireLock`, `setState`, `getState`), plus **metrics** (same atoms as in the CLI; see `useMetricAtom` in the R10 and R10b transforms).",
   );
   lines.push("");
   lines.push(`- **Package root (this manifest):** \`${packageRoot}\``);
   lines.push("");
 
-  lines.push("### Step outputs (`report`)");
+  lines.push("### Step reports (workflow state)");
   lines.push("");
   let anyStep = false;
   for (const s of steps) {
@@ -177,7 +206,7 @@ export function buildMigrationRunSummarySection(params: {
   }
   if (!anyStep) {
     lines.push(
-      "*No earlier step outputs found (normal when only this script runs, or outputs were not written for this package).*",
+      "*No step reports in workflow state for this package (normal when only this script runs, or earlier steps did not persist a report).*",
     );
     lines.push("");
   }

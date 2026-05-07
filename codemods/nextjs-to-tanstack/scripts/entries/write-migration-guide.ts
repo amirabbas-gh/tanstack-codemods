@@ -162,6 +162,7 @@ const codemod: Codemod<JSON_TYPES> = async (root, options) => {
   const r10b = getState<R10bAccum>(`mtg:r10b:${pkgRoot}`);
   const summary = buildMigrationRunSummarySection({
     packageRoot: relativeToTargetDir(dir, options.targetDir ?? dir),
+    stateKeyRoot: pkgRoot,
     r10,
     r10b,
     r10Metric,
