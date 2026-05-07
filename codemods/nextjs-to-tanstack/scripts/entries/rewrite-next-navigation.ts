@@ -2,14 +2,16 @@
  * Rewrites `next/navigation` to `@tanstack/react-router` where safe:
  * - `usePathname` → `useLocation` + `usePathname()` → `useLocation().pathname`
  * - `useSearchParams` → `useSearch` + call sites → `useSearch()`
- * - `useParams` → TanStack `useParams` only when the file defines a file route
- *   (`createFileRoute` / `createLazyFileRoute`).
+ * - `useParams` → TanStack `useParams` (same call sites; valid under `RouterProvider`
+ *   like `useNavigate` / `useLocation`).
  * - `redirect` / `permanentRedirect` → `redirect` from TanStack; single-arg calls become
  *   `throw redirect({ to | href: … })` and permanent → `statusCode: 308` (external URLs
  *   use `href` when the literal looks like http(s)).
  * - `useRouter().push` / `.replace` and binding `const r = useRouter(); r.push` / `.replace`
- *   → `useNavigate()({ to: … })` (optional `replace: true`), skipped when the same binding
- *   uses `.prefetch`, `.back`, `.refresh`, or `.forward`.
+ *   → `useNavigate()` / binding calls with `NavigateOptions`: when safe, splits URLs into
+ *   `to` (with `$param` segments, no interpolated path params), `params`, `search`, and
+ *   `hash` per TanStack navigation docs; otherwise falls back to `to: <original expr>`.
+ *   Skipped when the same binding uses `.prefetch`, `.back`, `.refresh`, or `.forward`.
  *
  * `// TODO (R4g)` once when `redirect`/router navigation call patterns are rewritten.
  * Other hook import moves (pathname/search only) do not add R4g.
@@ -34,18 +36,6 @@ const UNSUPPORTED_ROUTER_MEMBERS = new Set([
 const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const source = rootNode.text();
-
-  const allowUseParamsFromTanStack =
-    rootNode.find({
-      rule: {
-        kind: "call_expression",
-        has: {
-          field: "function",
-          kind: "identifier",
-          regex: "^(createFileRoute|createLazyFileRoute)$",
-        },
-      },
-    }) !== null;
 
   const skipUseRouterCallMigrate = shouldSkipUseRouterMigration(rootNode);
 
@@ -113,11 +103,7 @@ const codemod: Codemod<TSX> = async (root) => {
         continue;
       }
       if (/^useParams\b/.test(s)) {
-        if (allowUseParamsFromTanStack) {
-          tanstackFromStmt.push(s);
-          continue;
-        }
-        keepNext.push(s);
+        tanstackFromStmt.push(s);
         continue;
       }
 
@@ -151,12 +137,11 @@ const codemod: Codemod<TSX> = async (root) => {
       if (!inner) continue;
       const arg = firstCallArg(call.field("arguments"));
       if (!arg) continue;
-      const argText = arg.text();
-      if (prop === "push") {
-        edits.push(call.replace(`useNavigate()({ to: ${argText} })`));
-      } else {
-        edits.push(call.replace(`useNavigate()({ to: ${argText}, replace: true })`));
-      }
+      edits.push(
+        call.replace(
+          buildImperativeNavigationCall("useNavigate()", arg, prop === "replace"),
+        ),
+      );
       routerNavEdits++;
     }
 
@@ -178,12 +163,9 @@ const codemod: Codemod<TSX> = async (root) => {
         if (parent.field("function")?.id() !== mem.id()) continue;
         const arg = firstCallArg(parent.field("arguments"));
         if (!arg) continue;
-        const argText = arg.text();
-        const repl =
-          p === "push"
-            ? `${name}({ to: ${argText} })`
-            : `${name}({ to: ${argText}, replace: true })`;
-        edits.push(parent.replace(repl));
+        edits.push(
+          parent.replace(buildImperativeNavigationCall(name, arg, p === "replace")),
+        );
         routerNavEdits++;
       }
     }
@@ -511,6 +493,223 @@ function mergeTanstackImports(specs: string[]): string[] {
     list.push(key);
   }
   return list;
+}
+
+/**
+ * Imperative navigation target for migrated `router.push` / `router.replace`.
+ * Uses structured `to` + `params` + `search` + `hash` when the URL can be split safely;
+ * see https://tanstack.com/router/latest/docs/framework/react/guide/navigation
+ */
+function buildImperativeNavigationCall(
+  callee: string,
+  arg: SgNode<TSX>,
+  replace: boolean,
+): string {
+  const body = tryStructuredNavigateArg(arg) ?? `to: ${arg.text()}`;
+  const suffix = replace ? ", replace: true" : "";
+  return `${callee}({ ${body}${suffix} })`;
+}
+
+function tryStructuredNavigateArg(arg: SgNode<TSX>): string | null {
+  const k = arg.kind();
+  if (k === "string_literal" || k === "string") {
+    const inner = stringLiteralInner(arg.text());
+    if (/^https?:\/\//i.test(inner)) return null;
+    return tryStructuredStaticPathQueryHash(inner);
+  }
+  if (k === "template_string") {
+    return tryStructuredTemplateUrl(arg);
+  }
+  return null;
+}
+
+function stringLiteralInner(raw: string): string {
+  if (
+    (raw.startsWith('"') && raw.endsWith('"')) ||
+    (raw.startsWith("'") && raw.endsWith("'"))
+  ) {
+    return raw.slice(1, -1);
+  }
+  return raw;
+}
+
+function tryStructuredStaticPathQueryHash(inner: string): string | null {
+  const hashIdx = inner.indexOf("#");
+  let pathQuery = inner;
+  let hash: string | null = null;
+  if (hashIdx >= 0) {
+    pathQuery = inner.slice(0, hashIdx);
+    hash = inner.slice(hashIdx + 1);
+  }
+  const qIdx = pathQuery.indexOf("?");
+  const path = qIdx >= 0 ? pathQuery.slice(0, qIdx) : pathQuery;
+  const query = qIdx >= 0 ? pathQuery.slice(qIdx + 1) : "";
+  if (!path.startsWith("/")) return null;
+  const parts: string[] = [`to: ${JSON.stringify(path)}`];
+  if (query.length > 0) {
+    const s = parseQueryToSearchObjectLiteral(query);
+    if (!s) return null;
+    parts.push(`search: ${s}`);
+  }
+  if (hash !== null && hash.length > 0) {
+    parts.push(`hash: ${JSON.stringify(hash)}`);
+  }
+  return parts.join(", ");
+}
+
+type TemplatePiece =
+  | { kind: "str"; text: string }
+  | { kind: "sub"; expr: SgNode<TSX> };
+
+function collectTemplatePieces(node: SgNode<TSX>): TemplatePiece[] | null {
+  if (node.kind() !== "template_string") return null;
+  const out: TemplatePiece[] = [];
+  let buf = "";
+  for (const c of node.children()) {
+    const k = c.kind();
+    if (k === "`") continue;
+    if (k === "string_fragment") {
+      buf += c.text();
+    } else if (k === "escape_sequence") {
+      buf += c.text();
+    } else if (k === "template_substitution") {
+      if (buf.length) {
+        out.push({ kind: "str", text: buf });
+        buf = "";
+      }
+      const expr = templateSubstitutionExpr(c);
+      if (!expr) return null;
+      out.push({ kind: "sub", expr });
+    }
+  }
+  if (buf.length) out.push({ kind: "str", text: buf });
+  return out;
+}
+
+function templateSubstitutionExpr(sub: SgNode<TSX>): SgNode<TSX> | null {
+  for (const c of sub.children()) {
+    const k = c.kind();
+    if (k === "${" || k === "}" || k === "$") continue;
+    return c as SgNode<TSX>;
+  }
+  return null;
+}
+
+function simpleSubstitutionBinding(expr: SgNode<TSX>): { param: string; exprText: string } | null {
+  if (expr.kind() !== "identifier") return null;
+  const t = expr.text();
+  return { param: t, exprText: t };
+}
+
+function tryStructuredTemplateUrl(node: SgNode<TSX>): string | null {
+  const pieces = collectTemplatePieces(node);
+  if (pieces === null) return null;
+
+  type PathTok =
+    | { t: "s"; v: string }
+    | { t: "p"; param: string; exprText: string };
+
+  const pathToks: PathTok[] = [];
+  let queryBuf = "";
+  let hashBuf = "";
+  let phase: "path" | "query" | "hash" = "path";
+
+  for (const p of pieces) {
+    if (p.kind === "sub") {
+      if (phase !== "path") return null;
+      const b = simpleSubstitutionBinding(p.expr);
+      if (!b) return null;
+      pathToks.push({ t: "p", param: b.param, exprText: b.exprText });
+    } else {
+      const text = p.text;
+      if (phase === "path") {
+        const qAt = text.indexOf("?");
+        const hAt = text.indexOf("#");
+        if (hAt >= 0 && (qAt < 0 || hAt < qAt)) {
+          if (hAt > 0) pathToks.push({ t: "s", v: text.slice(0, hAt) });
+          phase = "hash";
+          hashBuf += text.slice(hAt + 1);
+          continue;
+        }
+        if (qAt >= 0) {
+          if (qAt > 0) pathToks.push({ t: "s", v: text.slice(0, qAt) });
+          phase = "query";
+          queryBuf += text.slice(qAt + 1);
+          continue;
+        }
+        pathToks.push({ t: "s", v: text });
+      } else if (phase === "query") {
+        if (/[?#]/.test(text)) return null;
+        queryBuf += text;
+      } else {
+        hashBuf += text;
+      }
+    }
+  }
+
+  let toPat = "";
+  const paramsOrder: string[] = [];
+  const paramToExpr = new Map<string, string>();
+  for (const t of pathToks) {
+    if (t.t === "s") {
+      toPat += t.v;
+    } else {
+      toPat += `$${t.param}`;
+      if (!paramToExpr.has(t.param)) {
+        paramsOrder.push(t.param);
+        paramToExpr.set(t.param, t.exprText);
+      }
+    }
+  }
+
+  if (!toPat.startsWith("/")) return null;
+
+  const out: string[] = [`to: ${JSON.stringify(toPat)}`];
+  if (paramsOrder.length > 0) {
+    const entries = paramsOrder.map((k) => {
+      const ex = paramToExpr.get(k)!;
+      return k === ex ? k : `${k}: ${ex}`;
+    });
+    out.push(`params: { ${entries.join(", ")} }`);
+  }
+  if (queryBuf.length > 0) {
+    const s = parseQueryToSearchObjectLiteral(queryBuf);
+    if (!s) return null;
+    out.push(`search: ${s}`);
+  }
+  if (hashBuf.length > 0) {
+    out.push(`hash: ${JSON.stringify(hashBuf)}`);
+  }
+  return out.join(", ");
+}
+
+function searchKeyFragment(key: string): string | null {
+  if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) return key;
+  try {
+    return JSON.stringify(key);
+  } catch {
+    return null;
+  }
+}
+
+function parseQueryToSearchObjectLiteral(query: string): string | null {
+  const parts = query.split("&").filter((p) => p.length > 0);
+  const props: string[] = [];
+  for (const part of parts) {
+    const eq = part.indexOf("=");
+    if (eq < 0) {
+      const kf = searchKeyFragment(part);
+      if (!kf) return null;
+      props.push(`${kf}: true`);
+    } else {
+      const key = part.slice(0, eq);
+      const val = part.slice(eq + 1);
+      const kf = searchKeyFragment(key);
+      if (!kf) return null;
+      props.push(`${kf}: ${JSON.stringify(val)}`);
+    }
+  }
+  return `{ ${props.join(", ")} }`;
 }
 
 /** `useRouter` call is not the `foo` part of `foo.push` / `foo.replace`. */

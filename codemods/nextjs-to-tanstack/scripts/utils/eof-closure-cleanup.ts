@@ -8,7 +8,12 @@
  * IMPORTANT: Never use `/m` on `$` here — with multiline `$`, `\s*` can span
  * newlines inside nested object/type literals and falsely match legitimate `};`
  * pairs mid-file (e.g. Prisma `TeamGetPayload<{ ... }>`).
+ *
+ * Duplicate closings must use **horizontal** whitespace only between stacked `};`
+ * tokens (e.g. `};};`). If a **newline** separates two trailing `};`, that is
+ * almost always valid code (`return { … };` then the outer block `};`), not a
+ * merge artifact — deleting it corrupts hooks and helpers (see app `_hooks/*.ts`).
  */
 export function collapseDuplicateTrailingExportClosures(source: string): string {
-  return source.replace(/(\}\s*;)(\s*\}\s*;)+\s*$/, "$1\n");
+  return source.replace(/(\}\s*;)((?:[ \t]*\}\s*;)+)\s*$/, "$1\n");
 }

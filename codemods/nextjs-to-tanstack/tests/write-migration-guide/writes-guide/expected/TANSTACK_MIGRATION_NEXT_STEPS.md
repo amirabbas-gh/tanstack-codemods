@@ -36,6 +36,7 @@ Resolve or delete each marker as you port the code. Safe `next/dynamic` / extern
 ## 2. Install and run
 
 - Install dependencies (`pnpm install`, `yarn`, or `npm install`).
+- **Lockfiles** — R11 edits `package.json` only; it does **not** rewrite `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`. Run a **normal** install once after the codemod so your lockfile matches the manifest; **`npm ci` / frozen-lockfile installs will fail** until you do.
 - If **`next-auth`**, **`next-i18next`**, or **`@sentry/nextjs`** (etc.) remain, replace or reconfigure them — **`next`** is removed from `package.json` and those packages often expect it as a peer.
 - Run **`pnpm dev` / `npm run dev` / `vite dev`** and fix compile errors.
 

@@ -32,6 +32,10 @@ const codemod: Codemod<TSX> = async (root) => {
   // (atoms, tooling, barrels next to unrelated `export const Route`). Only run brace
   // repair where a route factory call is clearly present — pure TS barrels like
   // `libraries/index.ts` must never be truncated.
+  // Avoid treating `import { createFileRoute } …` alone as a route module — brace
+  // repair must only run when this file actually exports `Route`.
+  if (!/\bexport\s+const\s+Route\s*=/.test(source)) return null;
+
   if (!/\bcreate(File|Root|LazyFile)Route\b/.test(source)) return null;
 
   const next = applyRepairRouteTailPipeline(source);
