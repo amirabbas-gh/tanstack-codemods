@@ -13,7 +13,7 @@ params:
       name: "Enable AI Follow-up Fixups"
       description: "Run AI step for remaining TODOs and TANSTACK_MIGRATION_NEXT_STEPS tasks."
       type: string
-      default: "true"
+      default: "false"
 
 x-shared-excludes: &shared-excludes
   - "**/node_modules/**"
