@@ -1,0 +1,10 @@
+{
+  "source": "next-i18n",
+  "defaultLocale": "en",
+  "locales": [
+    "en",
+    "fr",
+    "fa"
+  ],
+  "tanstackOptionalLocaleSegment": "{-$locale}"
+}

@@ -17,10 +17,10 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "fs";
+import { safeRemoveDir } from "../utils/safe-remove.ts";
 import { dirname, join } from "path";
 import {
   emitWorkflowStepReport,
@@ -80,7 +80,7 @@ function handleLegacyPages(pagesPath: string, backupDest: string): LegacyPagesDi
   const entries = readdirSync(pagesPath);
   if (entries.length === 0) {
     try {
-      rmSync(pagesPath, { recursive: true, force: true });
+      safeRemoveDir(pagesPath);
     } catch {
       /* busy or permission — ignore */
     }
@@ -89,10 +89,10 @@ function handleLegacyPages(pagesPath: string, backupDest: string): LegacyPagesDi
 
   mkdirSync(dirname(backupDest), { recursive: true });
   if (pathExists(backupDest)) {
-    rmSync(backupDest, { recursive: true, force: true });
+    safeRemoveDir(backupDest);
   }
   copyDirRecursive(pagesPath, backupDest);
-  rmSync(pagesPath, { recursive: true, force: true });
+  safeRemoveDir(pagesPath);
 
   const readmePath = join(dirname(backupDest), README_NAME);
   if (!pathExists(readmePath)) {
@@ -114,7 +114,7 @@ function copyDirRecursive(src: string, dest: string): void {
     if (ent.isDirectory()) {
       copyDirRecursive(from, to);
     } else {
-      writeFileSync(to, readFileSync(from));
+      writeFileSync(to, readFileSync(from, "utf8"));
     }
   }
 }

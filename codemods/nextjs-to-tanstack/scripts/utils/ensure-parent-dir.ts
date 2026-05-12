@@ -11,9 +11,10 @@
  * materialize paths when applying edits and renames.
  */
 
-import { mkdirSync, readdirSync, rmdirSync } from "fs";
+import { mkdirSync, readdirSync } from "fs";
 import { dirname } from "path";
 import { inferCodemodTargetDir, normalizePath } from "./paths.ts";
+import { safeRmdirIfEmpty } from "./safe-remove.ts";
 
 export function ensureParentDir(absFilePath: string): void {
   const dir = dirname(absFilePath);
@@ -40,7 +41,7 @@ export function pruneEmptyAncestorsAfterRename(previousFileAbsolute: string): vo
 
       try {
         if (readdirSync(d).length > 0) return;
-        rmdirSync(d);
+        if (!safeRmdirIfEmpty(d)) return;
       } catch {
         return;
       }

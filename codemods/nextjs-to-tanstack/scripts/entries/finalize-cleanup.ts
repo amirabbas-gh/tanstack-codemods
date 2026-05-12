@@ -7,9 +7,9 @@
 
 import type { Codemod } from "codemod:ast-grep";
 import type JSON_TYPES from "codemod:ast-grep/langs/json";
-import { rmSync } from "fs";
 import { dirname, join } from "path";
 import { getFilename } from "../utils/paths.ts";
+import { safeRemoveFile } from "../utils/safe-remove.ts";
 
 const codemod: Codemod<JSON_TYPES> = async (root) => {
   const file = getFilename(root);
@@ -20,7 +20,7 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
   const repoRoot = dirname(file);
   const stateDir = join(repoRoot, ".codemod");
   try {
-    rmSync(join(stateDir, "state.json"), { force: true });
+    safeRemoveFile(join(stateDir, "state.json"));
   } catch {
     // Already absent — fine.
   }

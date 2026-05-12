@@ -48,7 +48,7 @@ export function emitWorkflowStepReport(payload: unknown): void {
   const key = workflowStepReportStateKey(packageRoot, step);
   const release = acquireLock(`${key}:lock`);
   try {
-    setState(key, payload, true);
+    setState(key, payload, false);
   } finally {
     release();
   }
@@ -63,7 +63,7 @@ export function bumpR10(fileAbs: string, todoMarkersAdded: number): void {
     const cur = getState<R10Accum>(key) ?? { files: [], todoMarkersAdded: 0 };
     cur.files.push(relPathUnderPkg(fileAbs));
     cur.todoMarkersAdded += todoMarkersAdded;
-    setState(key, cur, true);
+    setState(key, cur, false);
   } finally {
     release();
   }
@@ -79,7 +79,7 @@ export function bumpR10bFromModules(fileAbs: string, modules: string[]): void {
     for (const m of modules) {
       cur.byModule[m] = (cur.byModule[m] ?? 0) + 1;
     }
-    setState(key, cur, true);
+    setState(key, cur, false);
   } finally {
     release();
   }
@@ -95,7 +95,7 @@ export function bumpR10bMiddlewareFile(fileAbs: string): void {
     if (!cur.middlewareTodoFiles.includes(rel)) {
       cur.middlewareTodoFiles.push(rel);
     }
-    setState(key, cur, true);
+    setState(key, cur, false);
   } finally {
     release();
   }

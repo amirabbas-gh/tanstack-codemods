@@ -10,9 +10,10 @@
  * using `** /package.json` globs skip unrelated workspaces).
  *
  * `next` is **always** removed from the manifest once TanStack deps are added.
- * Packages such as `next-auth` or `next-i18next` may remain until you replace
- * them with framework-agnostic or TanStack-oriented alternatives; they no longer
- * keep `next` installed.
+ * Packages such as `next-auth` may remain until you replace them with
+ * framework-agnostic or TanStack-oriented alternatives; they no longer keep
+ * `next` installed. `next-i18next` is removed because this workflow rewrites its
+ * imports and emits an i18next/react-i18next bootstrap when locales are known.
  *
  * Mutations:
  *   - dependencies: remove `next`, `@tailwindcss/postcss`, and
@@ -20,6 +21,8 @@
  *     ensure TanStack Start deps (`@tanstack/react-router`, `@tanstack/react-start`,
  *     `vite`, `@vitejs/plugin-react`, `nitro`, `@unpic/react`) exist at `"latest"` unless
  *     already present with a different version.
+ *     Also ensure optional runtime packages used by emitted rewrites (`@vercel/og`,
+ *     `i18next`, `react-i18next`, `path-to-regexp`) are present.
  *   - devDependencies: ensure `@tailwindcss/vite` and `tailwindcss` exist.
  *     For each **Google** sidecar font (`next/font/google`), add
  *     `@fontsource-variable/<packageKey>` at `"latest"`.
@@ -31,6 +34,7 @@
 
 import type { Codemod } from "codemod:ast-grep";
 import type JSON_TYPES from "codemod:ast-grep/langs/json";
+import { readdirSync, readFileSync, statSync } from "fs";
 import { emitWorkflowStepReport, WORKFLOW_NODE_IDS } from "../utils/migration-run-report.ts";
 import { getFilename, normalizePath } from "../utils/paths.ts";
 import { hasFontsourcePackage, readSidecar } from "../utils/sidecar.ts";
@@ -84,7 +88,11 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
     return null;
   }
 
-  const targetDirNorm = normalizePath(inferTargetDir(file));
+  const targetDir = inferTargetDir(file);
+  const targetDirNorm = normalizePath(targetDir);
+  const hadNextI18next = Boolean(
+    pkg.dependencies?.["next-i18next"] ?? pkg.devDependencies?.["next-i18next"],
+  );
 
   const emitReport = (manifestChanged: boolean): void => {
     emitWorkflowStepReport({
@@ -99,8 +107,10 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
   // Remove Next-specific deps (always — migrated apps do not keep `next`).
   deleteDep(pkg, "dependencies", "next");
   deleteDep(pkg, "dependencies", "@tailwindcss/postcss");
+  deleteDep(pkg, "dependencies", "next-i18next");
   deleteDep(pkg, "devDependencies", "next");
   deleteDep(pkg, "devDependencies", "@tailwindcss/postcss");
+  deleteDep(pkg, "devDependencies", "next-i18next");
   deleteDep(pkg, "devDependencies", "eslint-config-next");
   deleteDep(pkg, "devDependencies", "@next/eslint-plugin-next");
   deleteDep(pkg, "dependencies", "eslint-config-next");
@@ -111,13 +121,32 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
     ensureDep(pkg, "dependencies", name, version);
   }
 
+  const needsI18next =
+    hadNextI18next ||
+    fileExists(`${targetDir}/.codemod/i18n.json`) ||
+    sourceTreeContains(targetDir, /\bfrom\s+["'](?:react-i18next|i18next)["']/);
+  if (needsI18next) {
+    ensureDep(pkg, "dependencies", "i18next", "latest");
+    ensureDep(pkg, "dependencies", "react-i18next", "latest");
+  }
+  if (sourceTreeContains(targetDir, /\bfrom\s+["']@vercel\/og["']/)) {
+    ensureDep(pkg, "dependencies", "@vercel/og", "latest");
+  }
+  if (
+    sourceTreeContains(
+      targetDir,
+      /\bfrom\s+["']path-to-regexp["']|\brequire\s*\(\s*["']path-to-regexp["']\s*\)/,
+    )
+  ) {
+    ensureDep(pkg, "dependencies", "path-to-regexp", "latest");
+  }
+
   // Ensure Tailwind devDeps.
   for (const [name, version] of DEV_DEPS) {
     ensureDep(pkg, "devDependencies", name, version);
   }
 
   // Fonts from the sidecar.
-  const targetDir = inferTargetDir(file);
   const sidecar = readSidecar(targetDir);
   for (const font of sidecar.fonts) {
     if (!hasFontsourcePackage(font)) continue;
@@ -222,6 +251,60 @@ function inferTargetDir(packageJsonPath: string): string {
   const idx = packageJsonPath.lastIndexOf("/");
   if (idx === -1) return ".";
   return packageJsonPath.slice(0, idx);
+}
+
+function fileExists(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sourceTreeContains(dir: string, needle: RegExp): boolean {
+  const ignored = new Set([
+    "node_modules",
+    ".next",
+    "dist",
+    "build",
+    "coverage",
+    ".git",
+    "migrated-from-pages",
+  ]);
+  const stack = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries: string[];
+    try {
+      entries = readdirSync(current);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (ignored.has(name)) continue;
+      const full = `${current}/${name}`;
+      let st;
+      try {
+        st = statSync(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (!/\.(?:[cm]?[jt]sx?|json)$/.test(name)) continue;
+      let text: string;
+      try {
+        text = readFileSync(full, "utf8");
+      } catch {
+        continue;
+      }
+      if (needle.test(text)) return true;
+    }
+  }
+  return false;
 }
 
 function collectNextAdjacentDeps(pkg: PackageJson): string[] {

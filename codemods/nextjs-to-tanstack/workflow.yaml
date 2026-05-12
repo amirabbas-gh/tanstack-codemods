@@ -47,6 +47,7 @@ nodes:
   - id: cleanup-obsolete-files
     name: Delete Next.js config files
     type: automatic
+    depends_on: [scaffold-tanstack-files]
     steps:
       - name: Remove next.config.* and postcss.config.*
         js-ast-grep:
@@ -67,7 +68,6 @@ nodes:
   - id: scaffold-tanstack-files
     name: Create vite.config.ts and router.tsx (TanStack Start scaffold)
     type: automatic
-    depends_on: [cleanup-obsolete-files]
     steps:
       # When `next-i18next.config.*` / Next `i18n` is present, also writes `.codemod/i18n.json`
       # and later steps emit `src/app/{-$locale}/…` + `createFileRoute("/{-$locale}/…")` per TanStack i18n docs.
@@ -84,7 +84,7 @@ nodes:
   - id: rewrite-root-layout
     name: R1 — Convert layout.tsx / _app.tsx to __root.tsx
     type: automatic
-    depends_on: [scaffold-tanstack-files]
+    depends_on: [cleanup-obsolete-files]
     steps:
       - name: Structural rewrite + rename
         js-ast-grep:

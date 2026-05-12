@@ -1,16 +1,12 @@
 {
-  "name": "with-next-auth",
-  "version": "0.0.0",
+  "name": "runtime-deps",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
-    "start": "node .output/server/index.mjs"
+    "build": "vite build"
   },
   "dependencies": {
-    "next-auth": "^4.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
     "@tanstack/react-query": "latest",
     "@tanstack/react-router": "latest",
     "@tanstack/react-start": "latest",
@@ -18,8 +14,8 @@
     "@vitejs/plugin-react": "latest",
     "nitro": "latest",
     "@unpic/react": "latest",
-    "i18next": "latest",
-    "react-i18next": "latest"
+    "@vercel/og": "latest",
+    "path-to-regexp": "latest"
   },
   "devDependencies": {
     "@tailwindcss/vite": "latest",

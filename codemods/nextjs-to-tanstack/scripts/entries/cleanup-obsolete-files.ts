@@ -9,8 +9,8 @@
 
 import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
-import { rmSync } from "fs";
 import { getFilename } from "../utils/paths.ts";
+import { safeRemoveFile } from "../utils/safe-remove.ts";
 
 const OBSOLETE = /\/(next|postcss)\.config\.(js|mjs|cjs|ts|mts|cts)$/;
 
@@ -19,7 +19,7 @@ const codemod: Codemod<TSX> = async (root) => {
   if (!OBSOLETE.test(file)) return null;
 
   try {
-    rmSync(file, { force: true });
+    safeRemoveFile(file);
   } catch {
     // Already gone, no-op.
   }
