@@ -193,12 +193,25 @@ nodes:
             - "**/app/**/template.tsx"
           exclude: *shared-excludes
 
+  - id: prune-empty-next-route-dirs
+    name: R2c — Remove empty Next.js `[segment]` / `[...]` dirs under app/
+    type: automatic
+    depends_on: [rewrite-special-next-files]
+    steps:
+      - name: Delete abandoned dynamic segment folders after page moves
+        js-ast-grep:
+          js_file: scripts/entries/prune-empty-next-route-dirs.ts
+          language: json
+          include:
+            - "**/package.json"
+          exclude: *shared-excludes
+
   # ---- Post-structure rewrites (operate on already-renamed files) ----
 
   - id: rewrite-dynamic-params
     name: R3 — Rewrite params / searchParams to Route hooks
     type: automatic
-    depends_on: [rewrite-special-next-files]
+    depends_on: [prune-empty-next-route-dirs]
     steps:
       - name: Replace await params with Route.useParams / Route.useSearch
         js-ast-grep:
@@ -376,14 +389,15 @@ nodes:
           exclude: *shared-excludes
 
   - id: annotate-async-pages
-    name: R10 — TODO for async route components still awaiting at render
+    name: R10 — Move safe top-level await into Route.loader + useLoaderData (TODO otherwise)
     type: automatic
     depends_on: [rewrite-next-og]
     steps:
-      - name: Insert migration note when createFileRoute components use top-level await
+      - name: Extract sequential top-level await into createFileRoute.loader (or TODO when unsafe)
         js-ast-grep:
           js_file: scripts/entries/annotate-async-pages.ts
           language: tsx
+          semantic_analysis: workspace
           include: *cross-cutting-tsx
           exclude: *shared-excludes
 

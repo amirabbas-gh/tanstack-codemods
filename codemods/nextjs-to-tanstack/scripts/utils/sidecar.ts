@@ -16,15 +16,30 @@ import { dirname, join } from "path";
 
 const DEFAULT_FILE = ".codemod/state.json";
 
+export interface LocalFontFace {
+  /** Path to the font file, POSIX relative to the package root (e.g. `src/fonts/x.woff2`). */
+  repoRelativePath: string;
+  weight?: string | null;
+  style?: string | null;
+}
+
 export interface FontEntry {
   /** Either "next/font/google" or "next/font/local". */
   importSource: "next/font/google" | "next/font/local";
-  /** Display name, e.g. "Inter". For `next/font/local` this is the binding name. */
+  /** Display name, e.g. "Inter". For `next/font/local` this is the binding name unless `fontFaceFamily` is set. */
   family: string;
   /** kebab-cased family used for `@fontsource-variable/<packageKey>` (Google only). */
   packageKey: string;
   /** Variable option supplied to the Next helper, e.g. "--font-sans". */
   variable: string | null;
+  /** Google: `subsets` option from `next/font/google` (informational). */
+  googleSubsets?: string[] | null;
+  /** Local: explicit `family` string from `localFont({ family: "…" })` when present. */
+  fontFaceFamily?: string | null;
+  /** Local: one or more files for `@font-face` `src: url(…)`. */
+  localFaces?: LocalFontFace[] | null;
+  /** Local: top-level `display` from `localFont({ … })`. */
+  fontDisplay?: string | null;
 }
 
 /** Only `next/font/google` families are published as `@fontsource-variable/*` on npm. */

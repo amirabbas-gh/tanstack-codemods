@@ -83,6 +83,30 @@ export function addDefaultImport<T extends TypesMap>(
 }
 
 /**
+ * `@jssg/utils` `addImport` can merge named specifiers as `{ createFileRoute , Link }` (space before `,`).
+ * Replace affected `import { … } from "@tanstack/react-router"` statements with normal `, ` spacing.
+ */
+export function tanstackRouterNamedImportCommaFixEdits<T extends TypesMap>(
+  program: SgNode<T>,
+): Edit[] {
+  const edits: Edit[] = [];
+  const untyped = program as unknown as SgNode<TypesMap>;
+  for (const stmt of untyped.findAll({ rule: { kind: "import_statement" } })) {
+    const t = stmt.text();
+    if (!/from\s*["']@tanstack\/react-router["']/.test(t)) continue;
+    const fixed = t.replace(/([\w$])\s+,/g, "$1,");
+    if (fixed !== t) {
+      edits.push({
+        startPos: stmt.range().start.index,
+        endPos: stmt.range().end.index,
+        insertedText: fixed,
+      });
+    }
+  }
+  return edits;
+}
+
+/**
  * True if `program` contains any JSX element whose opening tag's name is
  * `alias`. Use this to detect whether an import's local binding is actually
  * referenced before bothering to rewrite JSX.

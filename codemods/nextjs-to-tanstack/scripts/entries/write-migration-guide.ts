@@ -110,6 +110,15 @@ Run **\`vite dev\`** or **build** so \`FileRoutesByPath\` matches your routes.
 
 TanStack Router alone is SPA-oriented; **this codemod** targets TanStack Start (SSR loaders, server routes, \`createServerFn\`).
 
+### Dynamic routes, splat (catch-all), and \`searchParams\`
+
+**R2** (\`rewrite-pages\`) wraps pages in \`createFileRoute(<routeId>)({ component })\`. **R3** (\`rewrite-dynamic-params\`) rewrites Next’s \`params\` / \`searchParams\` props to TanStack hooks — same mental model as the official [Migrate from Next.js](https://tanstack.com/start/latest/docs/framework/react/migrate-from-next-js) doc:
+
+- **Dynamic segments** — Filenames use \`$slug\`, \`$postId\`, etc.; \`createFileRoute\` IDs look like \`/posts/$slug\` (the URL shape, **not** a literal \`/src/app/\` prefix).
+- **\`Route.useParams()\`** — Replaces \`{ params }\` / \`await params\` in the route component.
+- **Splat / catch-all** — Files named \`$.tsx\` are splat routes; the unmatched tail of the pathname is **\`_splat\`** (R3 renames a single catch-all binding to \`_splat\`). See [routing concepts — splat / catch-all](https://tanstack.com/router/latest/docs/framework/react/routing/routing-concepts#splat--catch-all-routes).
+- **\`Route.useSearch()\`** — Replaces \`searchParams\` / \`await searchParams\` for validated search params on the route.
+
 ## 1. In-repo TODO markers (start here)
 
 The workflow inserts single-line source comments you can search for:
@@ -118,7 +127,7 @@ The workflow inserts single-line source comments you can search for:
 rg '// TODO:'
 \`\`\`
 
-- **R10** — \`// TODO: … Route.loader …\` before \`createFileRoute\` components that still use **top-level \`await\`** (move data into \`Route.loader\` or server functions).
+- **R10** — sequential top-level \`await\` in \`createFileRoute\` components is moved into \`loader\` + \`Route.useLoaderData()\` when the pattern is safe; a \`// TODO: … Route.loader …\` line remains when the codemod cannot rewrite automatically (control flow, nested \`await\`, etc.) — [data loading](https://tanstack.com/router/latest/docs/framework/react/guide/data-loading).
 - **R10a-quater** — \`rewrite-next-types\` erases \`next/types\`, **type-only** \`import type … from "next"\`, and type-only imports from **\`next/app\`**, **\`next/document\`**, **\`next/error\`** (bindings become \`any\`; unused \`(_p: PageProps)\` dropped). A \`// TODO:\` **(R4j)** marks each statement that still needs a real type — search \`(R4j)\`.
 - **R10b** — the same \`// TODO:\` prefix **immediately before each surviving \`from "next/…"\` import**, plus one file-level note for **\`middleware.ts\` / \`middleware.tsx\`** when it still imports from Next.
 - **R4e** (\`next/cache\`) — a banner \`// TODO:\` (search \`(R4e)\`) marks files where the codemod replaced \`next/cache\`; finalize TanStack Query: \`queryClient\` + \`QueryClientProvider\` (or app root wiring), consistent \`invalidateQueries\` / \`useQuery\` keys, and \`unstable_cache\` / \`unstable_noStore\` semantics via \`staleTime\`, \`gcTime\`, refetch — [invalidation guide](https://tanstack.com/query/latest/docs/framework/react/guides/query-invalidation), [overview](https://tanstack.com/query/latest/docs/framework/react/overview).

@@ -1,7 +1,7 @@
 /**
  * R2 — Convert Next.js `page.tsx` files to their TanStack Start equivalent.
  *
- * Renames every `src/app/**\/page.(t|j)sx` file using the route-path helper
+ * Renames every `src/app/**` / `page.(t|j)sx` file using the route-path helper
  * and wraps its default-exported React component in
  * `export const Route = createFileRoute('<path>')({ component: <Name> })`.
  *
@@ -22,35 +22,11 @@ import {
   type RoutePathResult,
 } from "../utils/route-path.ts";
 import { ensureParentDir, pruneEmptyAncestorsAfterRename } from "../utils/ensure-parent-dir.ts";
-import { getAppRelativePath, getFilename, inferCodemodTargetDir, normalizePath, resolveRenameTarget } from "../utils/paths.ts";
+import { getAppRelativePath, getFilename, inferCodemodTargetDir, resolveRenameTarget } from "../utils/paths.ts";
 import { applyOptionalLocaleToRoutePathResult } from "../utils/i18n-optional-locale-path.ts";
 import { readResolvedI18nConfig } from "../utils/read-next-i18n-config.ts";
 import { insertTodoBefore } from "../utils/sentinels.ts";
-import { deepenRelativeParentImports } from "../utils/deepen-relative-imports.ts";
-
-/**
- * `src/pages/<dir>/index.tsx` → `src/app/<dir>.tsx` removes one directory level; relative
- * imports that used `../../` to reach `src/` must become `../`.
- */
-function shouldCollapseChildIndexImports(relative: string): boolean {
-  /**
-   * Paths like `src/pages/segment/index.tsx` become `app/segment.tsx` (one fewer directory).
-   * `src/pages/index.tsx` → `app/index.tsx` keeps the same depth — do not collapse imports.
-   */
-  return /(^|\/)pages\/(.+)\/index\.(tsx|jsx)$/i.test(normalizePath(relative));
-}
-
-/** Reduce leading `../` by one in `from '…'` paths when at least two `../` segments exist. */
-function collapseOneRelativeImportLevel(source: string): string {
-  return source.replace(
-    /(\bfrom\s+["'])(\.\.\/)+/g,
-    (full, prefix: string) => {
-      const n = (full.match(/\.\.\//g) ?? []).length;
-      if (n <= 1) return full;
-      return `${prefix}${"../".repeat(n - 1)}`;
-    },
-  );
-}
+import { rewriteRelativeImportsAfterFileMove } from "../utils/rewrite-relative-imports-after-move.ts";
 
 const TANSTACK_ROUTER = "@tanstack/react-router";
 const PAGES_DOC =
@@ -94,7 +70,7 @@ const codemod: Codemod<TSX> = async (root) => {
     return null;
   }
 
-  let routeInfo = computeRoutePath(relative);
+  let routeInfo = computeRoutePath(relative, getFilename(root));
   if (!routeInfo || routeInfo.routePath === null) {
     return emitTodo(rootNode);
   }
@@ -116,14 +92,7 @@ const codemod: Codemod<TSX> = async (root) => {
     // declaration that references the identifier. Anything else → TODO.
     const ident = firstChildOfKind(defaultExport, "identifier");
     if (!ident) return emitTodo(rootNode, defaultExport);
-    return wrapIdentifierExport(
-      root,
-      rootNode,
-      defaultExport,
-      ident,
-      routeInfo,
-      Boolean(i18n && routeInfo.newPath.includes("{-$locale}")),
-    );
+    return wrapIdentifierExport(root, rootNode, defaultExport, ident, routeInfo);
   }
 
   const fnName = fn.field("name")?.text();
@@ -174,12 +143,7 @@ const codemod: Codemod<TSX> = async (root) => {
   ensureParentDir(newPath);
   const oldAbsPath = getFilename(root);
   let out = rootNode.commitEdits(edits);
-  if (stripPagesPrefix(relative) && shouldCollapseChildIndexImports(relative)) {
-    out = collapseOneRelativeImportLevel(out);
-  }
-  if (i18n && routeInfo.newPath.includes("{-$locale}")) {
-    out = deepenRelativeParentImports(out);
-  }
+  out = rewriteRelativeImportsAfterFileMove(out, oldAbsPath, newPath);
   root.rename(newPath);
   pruneEmptyAncestorsAfterRename(oldAbsPath);
   writeOptionalCatchAllIndex(root, routeInfo.optionalCatchAllRedirect);
@@ -194,7 +158,6 @@ function wrapIdentifierExport(
   defaultExport: SgNode<TSX>,
   identifier: SgNode<TSX>,
   routeInfo: RoutePathResult,
-  deepenImportsForLocaleFolder: boolean,
 ): string {
   const name = identifier.text();
   const routePath = routeInfo.routePath!;
@@ -226,14 +189,8 @@ function wrapIdentifierExport(
   const renamed = resolveRenameTarget(root, routeInfo.newPath);
   ensureParentDir(renamed);
   const oldAbsPath = getFilename(root);
-  const relative = getAppRelativePath(root);
   let out = rootNode.commitEdits(edits);
-  if (stripPagesPrefix(relative) && shouldCollapseChildIndexImports(relative)) {
-    out = collapseOneRelativeImportLevel(out);
-  }
-  if (deepenImportsForLocaleFolder && routeInfo.newPath.includes("{-$locale}")) {
-    out = deepenRelativeParentImports(out);
-  }
+  out = rewriteRelativeImportsAfterFileMove(out, oldAbsPath, renamed);
   root.rename(renamed);
   pruneEmptyAncestorsAfterRename(oldAbsPath);
   writeOptionalCatchAllIndex(root, routeInfo.optionalCatchAllRedirect);

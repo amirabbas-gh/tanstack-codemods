@@ -26,7 +26,7 @@ import {
 import { applyOptionalLocaleToSpecialRouteFile } from "../utils/i18n-optional-locale-path.ts";
 import { readResolvedI18nConfig } from "../utils/read-next-i18n-config.ts";
 import { hasReviewSentinel, insertReviewBefore } from "../utils/sentinels.ts";
-import { deepenRelativeParentImports } from "../utils/deepen-relative-imports.ts";
+import { rewriteRelativeImportsAfterFileMove } from "../utils/rewrite-relative-imports-after-move.ts";
 
 const TANSTACK_ROUTER = "@tanstack/react-router";
 const TEMPLATE_RE = /^template\.(t|j)sx?$/;
@@ -118,9 +118,7 @@ const codemod: Codemod<TSX> = async (root) => {
   ensureParentDir(newPath);
   const oldAbsPath = getFilename(root);
   let out = rootNode.commitEdits(edits);
-  if (i18nCfg && routeInfo.newPath.includes("{-$locale}")) {
-    out = deepenRelativeParentImports(out);
-  }
+  out = rewriteRelativeImportsAfterFileMove(out, oldAbsPath, newPath);
   root.rename(newPath);
   pruneEmptyAncestorsAfterRename(oldAbsPath);
   return out;

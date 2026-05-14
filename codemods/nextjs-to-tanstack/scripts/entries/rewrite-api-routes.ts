@@ -30,6 +30,7 @@ import {
   transformNextApiDefaultHandlerBody,
 } from "../utils/next-api-default-to-tanstack.ts";
 import { insertTodoBefore } from "../utils/sentinels.ts";
+import { rewriteRelativeImportsAfterFileMove } from "../utils/rewrite-relative-imports-after-move.ts";
 
 /** TanStack route present and no leftover Next default API handler to migrate. */
 function isCompleteApiRouteModule(source: string): boolean {
@@ -157,7 +158,7 @@ function migrateDefaultExportPagesApiViaFs(
   const oldAbsPath = getFilename(root);
   root.rename(newPath);
   pruneEmptyAncestorsAfterRename(oldAbsPath);
-  return newFile;
+  return rewriteRelativeImportsAfterFileMove(newFile, abs, newPath);
 }
 
 function rewriteApiRoutesAst(
@@ -222,7 +223,8 @@ function rewriteApiRoutesAst(
   const newPath = resolveRenameTarget(root, routeInfo.newPath);
   ensureParentDir(newPath);
   const oldAbsPath = getFilename(root);
-  const out = rootNode.commitEdits(edits);
+  let out = rootNode.commitEdits(edits);
+  out = rewriteRelativeImportsAfterFileMove(out, oldAbsPath, newPath);
   root.rename(newPath);
   pruneEmptyAncestorsAfterRename(oldAbsPath);
 
@@ -398,9 +400,10 @@ function tryMigrateDefaultExportPagesApi(
   const out = rootNode.commitEdits([
     { startPos: start.index, endPos: end.index, insertedText: newFile },
   ]);
+  const fixed = rewriteRelativeImportsAfterFileMove(out, oldAbsPath, newPath);
   root.rename(newPath);
   pruneEmptyAncestorsAfterRename(oldAbsPath);
-  return out;
+  return fixed;
 }
 
 function collectHandlers(rootNode: SgNode<TSX>): Handler[] {
@@ -572,7 +575,8 @@ function migratePagesApiWithTodo(
   ensureParentDir(newPath);
   const oldAbsPath = getFilename(root);
   const out = rootNode.commitEdits([edit]);
+  const fixed = rewriteRelativeImportsAfterFileMove(out, oldAbsPath, newPath);
   root.rename(newPath);
   pruneEmptyAncestorsAfterRename(oldAbsPath);
-  return out;
+  return fixed;
 }

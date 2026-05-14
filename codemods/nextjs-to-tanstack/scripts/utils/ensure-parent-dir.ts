@@ -12,9 +12,31 @@
  */
 
 import { mkdirSync, readdirSync } from "fs";
-import { dirname } from "path";
+import type { Dirent } from "fs";
+import { basename, dirname, join } from "path";
 import { inferCodemodTargetDir, normalizePath } from "./paths.ts";
-import { safeRmdirIfEmpty } from "./safe-remove.ts";
+import { safeRemoveFile, safeRmdirIfEmpty } from "./safe-remove.ts";
+
+/** Filenames that should not block deleting an otherwise abandoned Next.js segment dir. */
+const IGNORABLE_APP_DIR_FILES = new Set([
+  ".DS_Store",
+  "Thumbs.db",
+  ".gitkeep",
+  ".keep",
+]);
+
+export function removeIgnorableFilesystemEntriesInDir(dirAbs: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(dirAbs);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!IGNORABLE_APP_DIR_FILES.has(name)) continue;
+    safeRemoveFile(join(dirAbs, name));
+  }
+}
 
 export function ensureParentDir(absFilePath: string): void {
   const dir = dirname(absFilePath);
@@ -40,6 +62,7 @@ export function pruneEmptyAncestorsAfterRename(previousFileAbsolute: string): vo
       if (d === pkgRoot || !d.startsWith(`${pkgRoot}/`)) return;
 
       try {
+        removeIgnorableFilesystemEntriesInDir(d);
         if (readdirSync(d).length > 0) return;
         if (!safeRmdirIfEmpty(d)) return;
       } catch {
@@ -53,4 +76,76 @@ export function pruneEmptyAncestorsAfterRename(previousFileAbsolute: string): vo
   } catch {
     /* No Node fs in some runtimes */
   }
+}
+
+/**
+ * Next.js App Router uses directories like `[slug]` or `[...slug]`; after files
+ * move to TanStack flat routes (`$slug.tsx`, `$.tsx`), those folders can be
+ * left empty. Remove any such segment directory under `app/` that is empty
+ * (after stripping ignorable files like `.DS_Store`). Deepest paths first.
+ */
+export function pruneEmptyNextBracketSegmentDirsUnderApp(appAbs: string): void {
+  try {
+    const root = normalizePath(appAbs);
+
+    for (let pass = 0; pass < 32; pass++) {
+      const dirs = collectAllSubdirectories(root);
+      dirs.sort((a, b) => b.length - a.length);
+      let removedAny = false;
+      for (const d of dirs) {
+        if (!isNextDynamicRouteSegmentFolder(basename(d))) continue;
+        removeIgnorableFilesystemEntriesInDir(d);
+        try {
+          if (readdirSync(d).length === 0 && safeRmdirIfEmpty(d)) removedAny = true;
+        } catch {
+          /* */
+        }
+      }
+      if (!removedAny) break;
+    }
+
+    // e.g. `app/posts/` left empty after `page.tsx` → `posts.tsx` and `[slug]` removed
+    for (let pass = 0; pass < 32; pass++) {
+      const dirs = collectAllSubdirectories(root);
+      dirs.sort((a, b) => b.length - a.length);
+      let removedAny = false;
+      for (const d of dirs) {
+        if (normalizePath(d) === root) continue;
+        removeIgnorableFilesystemEntriesInDir(d);
+        try {
+          if (readdirSync(d).length === 0 && safeRmdirIfEmpty(d)) removedAny = true;
+        } catch {
+          /* */
+        }
+      }
+      if (!removedAny) break;
+    }
+  } catch {
+    /* sandbox / no fs */
+  }
+}
+
+function collectAllSubdirectories(root: string): string[] {
+  const dirs: string[] = [];
+  const collect = (dir: string) => {
+    let dirents: Dirent[];
+    try {
+      dirents = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of dirents) {
+      if (!e.isDirectory()) continue;
+      if (e.name === "node_modules") continue;
+      const full = join(dir, e.name);
+      dirs.push(full);
+      collect(full);
+    }
+  };
+  collect(normalizePath(root));
+  return dirs;
+}
+
+function isNextDynamicRouteSegmentFolder(name: string): boolean {
+  return name.startsWith("[") && name.endsWith("]") && name.length >= 3;
 }

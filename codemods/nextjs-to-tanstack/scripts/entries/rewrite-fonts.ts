@@ -21,15 +21,17 @@
 import type { Codemod, Edit, SgNode } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { getImport } from "../utils/imports.ts";
-import { getFilename, inferCodemodTargetDir } from "../utils/paths.ts";
+import { getFilename, inferCodemodTargetDir, normalizePath } from "../utils/paths.ts";
 import {
   addFontEntries,
   familyToPackageKey,
   readSidecar,
   writeSidecar,
   type FontEntry,
+  type LocalFontFace,
 } from "../utils/sidecar.ts";
 import { hasReviewSentinel, insertReviewBefore } from "../utils/sentinels.ts";
+import { dirname, relative, resolve } from "path";
 
 const GOOGLE = "next/font/google";
 const LOCAL = "next/font/local";
@@ -90,6 +92,9 @@ const codemod: Codemod<TSX> = async (root) => {
   // matches one of the imported specifiers.
   const specifierSet = new Set(fontSpecifiers.map((s) => s.specifier));
   const fontBindings: Array<{ binding: string; entry: FontEntry }> = [];
+  const pkgRoot = normalizePath(inferCodemodTargetDir(getFilename(root)));
+  const layoutAbs = normalizePath(getFilename(root));
+  const layoutDir = dirname(layoutAbs);
 
   for (const child of rootNode.children()) {
     if (child.kind() !== "lexical_declaration" && child.kind() !== "variable_declaration") {
@@ -110,14 +115,41 @@ const codemod: Codemod<TSX> = async (root) => {
     const source = specifierSet.has(callee) ? sourceHint.source : null;
     if (!source) continue;
 
-    const variable = readVariableArg(value);
-    const family = source === "google" ? callee : bindingName;
-    const entry: FontEntry = {
-      importSource: source === "google" ? GOOGLE : LOCAL,
-      family,
-      packageKey: familyToPackageKey(family),
-      variable,
-    };
+    const configObj = firstCallObjectArg(value);
+    let entry: FontEntry;
+    if (source === "google") {
+      const variable = readObjectStringField(configObj, "variable") ?? readVariableArg(value);
+      const subsets = readStringArrayField(configObj, "subsets");
+      entry = {
+        importSource: GOOGLE,
+        family: callee,
+        packageKey: familyToPackageKey(callee),
+        variable: variable ?? null,
+        googleSubsets: subsets.length > 0 ? subsets : null,
+      };
+    } else {
+      const variable = readObjectStringField(configObj, "variable") ?? readVariableArg(value);
+      const fontFaceFamily = readObjectStringField(configObj, "family");
+      const fontDisplay = readObjectStringField(configObj, "display");
+      const topWeight = readObjectStringField(configObj, "weight");
+      const topStyle = readObjectStringField(configObj, "style");
+      const localFaces = buildLocalFontFaces(
+        configObj,
+        layoutDir,
+        pkgRoot,
+        topWeight,
+        topStyle,
+      );
+      entry = {
+        importSource: LOCAL,
+        family: bindingName,
+        packageKey: familyToPackageKey(bindingName),
+        variable: variable ?? null,
+        fontFaceFamily: fontFaceFamily ?? null,
+        fontDisplay: fontDisplay ?? null,
+        localFaces: localFaces.length > 0 ? localFaces : null,
+      };
+    }
     fontEntries.push(entry);
     fontBindings.push({ binding: bindingName, entry });
 
@@ -201,6 +233,110 @@ const codemod: Codemod<TSX> = async (root) => {
 };
 
 export default codemod;
+
+function firstCallObjectArg(call: SgNode<TSX>): SgNode<TSX> | null {
+  const args = call.field("arguments");
+  if (!args) return null;
+  for (const ch of args.children()) {
+    if (ch.is("object")) return ch;
+  }
+  return null;
+}
+
+function pairKeyText(pair: SgNode<TSX>): string | null {
+  const key = pair.field("key");
+  if (!key) return null;
+  if (key.is("property_identifier")) return key.text();
+  const frag = key.find({ rule: { kind: "string_fragment" } });
+  return frag?.text() ?? key.text();
+}
+
+function readObjectStringField(obj: SgNode<TSX> | null, name: string): string | null {
+  if (!obj) return null;
+  for (const pair of obj.findAll({ rule: { kind: "pair" } })) {
+    const parent = pair.parent();
+    if (!parent || parent.id() !== obj.id()) continue;
+    if (pairKeyText(pair) !== name) continue;
+    const val = pair.field("value");
+    if (!val) return null;
+    const frag = val.find({ rule: { kind: "string_fragment" } });
+    return frag?.text() ?? null;
+  }
+  return null;
+}
+
+function readStringArrayField(obj: SgNode<TSX> | null, name: string): string[] {
+  if (!obj) return [];
+  for (const pair of obj.findAll({ rule: { kind: "pair" } })) {
+    const parent = pair.parent();
+    if (!parent || parent.id() !== obj.id()) continue;
+    if (pairKeyText(pair) !== name) continue;
+    const val = pair.field("value");
+    if (!val || val.kind() !== "array") return [];
+    const out: string[] = [];
+    for (const s of val.findAll({ rule: { kind: "string" } })) {
+      const frag = s.find({ rule: { kind: "string_fragment" } });
+      if (frag) out.push(frag.text());
+    }
+    return out;
+  }
+  return [];
+}
+
+function findSrcValueNode(obj: SgNode<TSX>): SgNode<TSX> | null {
+  for (const pair of obj.findAll({ rule: { kind: "pair" } })) {
+    const parent = pair.parent();
+    if (!parent || parent.id() !== obj.id()) continue;
+    if (pairKeyText(pair) !== "src") continue;
+    return pair.field("value") ?? null;
+  }
+  return null;
+}
+
+function buildLocalFontFaces(
+  obj: SgNode<TSX> | null,
+  layoutDir: string,
+  pkgRoot: string,
+  topWeight: string | null,
+  topStyle: string | null,
+): LocalFontFace[] {
+  if (!obj) return [];
+  const srcVal = findSrcValueNode(obj);
+  if (!srcVal) return [];
+
+  const out: LocalFontFace[] = [];
+  const pushResolved = (raw: string, w: string | null, st: string | null) => {
+    const abs = normalizePath(resolve(layoutDir, raw));
+    const repoRel = normalizePath(relative(pkgRoot, abs));
+    const face: LocalFontFace = { repoRelativePath: repoRel };
+    if (w) face.weight = w;
+    if (st) face.style = st;
+    out.push(face);
+  };
+
+  if (srcVal.is("string")) {
+    const frag = srcVal.find({ rule: { kind: "string_fragment" } });
+    if (frag) pushResolved(frag.text(), topWeight, topStyle);
+    return out;
+  }
+  if (srcVal.is("array")) {
+    for (const ch of srcVal.children()) {
+      if (ch.kind() === "[" || ch.kind() === "]" || ch.kind() === ",") continue;
+      if (ch.kind() === "comment") continue;
+      if (ch.is("object")) {
+        const p = readObjectStringField(ch, "path");
+        if (!p) continue;
+        const w = readObjectStringField(ch, "weight") ?? topWeight;
+        const st = readObjectStringField(ch, "style") ?? topStyle;
+        pushResolved(p, w, st);
+      } else if (ch.kind() === "string") {
+        const frag = ch.find({ rule: { kind: "string_fragment" } });
+        if (frag) pushResolved(frag.text(), topWeight, topStyle);
+      }
+    }
+  }
+  return out;
+}
 
 function readVariableArg(call: SgNode<TSX>): string | null {
   const args = call.field("arguments");

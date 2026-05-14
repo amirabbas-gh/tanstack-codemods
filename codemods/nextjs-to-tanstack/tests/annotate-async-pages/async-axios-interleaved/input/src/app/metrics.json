@@ -1,0 +1,10 @@
+{
+  "nextjs-to-tanstack-r10-async-await": [
+    {
+      "cardinality": {
+        "file": "src/app/api.tsx"
+      },
+      "count": 1
+    }
+  ]
+}

@@ -15,11 +15,21 @@
  *
  * Dynamic / async `generateMetadata` / `generateViewport` exports are skipped
  * until a human wires them through `Route` loaders + `head()`.
+ *
+ * On `__root.tsx`, `<link rel="stylesheet" | preconnect | dns-prefetch | …>`
+ * tags inside `<head>` are hoisted into `head().links` and removed from JSX
+ * so they are not dropped when only `HeadContent` manages the document head.
  */
 
 import type { Codemod, Edit, SgNode } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { removeImport } from "../utils/imports.ts";
+import {
+  appendCssUrlStylesheetToLinkItems,
+  extractLayoutHeadStyleLinks,
+  isTanstackAppRootFile,
+  tryMergeCssUrlBindingIntoExistingHead,
+} from "../utils/layout-head-link-hoist.ts";
 import {
   composeHeadOption,
   metadataObjectToHeadParts,
@@ -40,16 +50,43 @@ const codemod: Codemod<TSX> = async (root) => {
   if (findNamedFunctionExport(rootNode, "generateMetadata")) return null;
   if (findNamedFunctionExport(rootNode, "generateViewport")) return null;
 
-  const metadataExport = findExportedConstObject(rootNode, "metadata");
-  const viewportExport = findExportedConstObject(rootNode, "viewport");
-
-  if (!metadataExport && !viewportExport) return null;
-
   const routeCall = findRouteCallExpression(rootNode);
   if (!routeCall) return null;
 
   const configObj = findRouteConfigObject(routeCall);
   if (!configObj) return null;
+
+  const source = rootNode.text();
+  const rootForHoist = rootNode as unknown as SgNode;
+
+  if (routeConfigObjectHasHeadProperty(configObj)) {
+    const mergeEdit = tryMergeCssUrlBindingIntoExistingHead(
+      source,
+      rootForHoist,
+      relative,
+      configObj as unknown as SgNode,
+    );
+    if (mergeEdit) {
+      return rootNode.commitEdits([mergeEdit]);
+    }
+    return null;
+  }
+
+  const headLinkHoist = isTanstackAppRootFile(relative)
+    ? extractLayoutHeadStyleLinks(rootForHoist, source)
+    : { linkItems: [] as string[], removals: [] as Edit[] };
+
+  const layoutHeadLinkItems = [...headLinkHoist.linkItems];
+  if (isTanstackAppRootFile(relative)) {
+    appendCssUrlStylesheetToLinkItems(layoutHeadLinkItems, rootForHoist);
+  }
+
+  const metadataExport = findExportedConstObject(rootNode, "metadata");
+  const viewportExport = findExportedConstObject(rootNode, "viewport");
+
+  if (!metadataExport && !viewportExport && layoutHeadLinkItems.length === 0) {
+    return null;
+  }
 
   const metaItems: string[] = [];
   const linkItems: string[] = [];
@@ -63,19 +100,23 @@ const codemod: Codemod<TSX> = async (root) => {
     }
   }
 
-  if (metadataExport) {
-    const md = metadataObjectToHeadParts(metadataExport.objNode);
-    metaItems.push(...md.metaItems);
-    linkItems.push(...md.linkItems);
-    for (const w of md.unmapped) {
+  const mdParts = metadataExport
+    ? metadataObjectToHeadParts(metadataExport.objNode)
+    : null;
+
+  if (mdParts) {
+    metaItems.push(...mdParts.metaItems);
+    for (const w of mdParts.unmapped) {
       reviewMessages.push(`metadata.${w} could not be mapped automatically`);
     }
   }
 
+  // Layout `<head>` links first (stylesheet order), then `metadata.icons`, etc.
+  linkItems.push(...layoutHeadLinkItems, ...(mdParts?.linkItems ?? []));
+
   const headOption = composeHeadOption(metaItems, linkItems);
 
   const edits: Edit[] = [];
-  const source = rootNode.text();
 
   // Inject `head: () => (...)` as the first property in the route config
   // object. We splice right after the opening `{`.
@@ -91,7 +132,7 @@ const codemod: Codemod<TSX> = async (root) => {
     insertedText: indented,
   });
 
-  const removals: Edit[] = [];
+  const removals: Edit[] = [...headLinkHoist.removals];
   if (viewportExport) {
     removals.push({
       startPos: viewportExport.lex.range().start.index,
@@ -189,6 +230,21 @@ function findRouteCallExpression(rootNode: SgNode<TSX>): SgNode<TSX> | null {
       },
     },
   });
+}
+
+function routeConfigObjectHasHeadProperty(configObj: SgNode<TSX>): boolean {
+  for (const ch of configObj.children()) {
+    if (ch.kind() !== "pair") continue;
+    const keyNode = ch.field("key");
+    if (!keyNode) continue;
+    if (keyNode.kind() === "property_identifier" || keyNode.kind() === "identifier") {
+      if (keyNode.text() === "head") return true;
+    } else if (keyNode.kind() === "string") {
+      const frag = keyNode.find({ rule: { kind: "string_fragment" } });
+      if (frag?.text() === "head") return true;
+    }
+  }
+  return false;
 }
 
 function findRouteConfigObject(routeCall: SgNode<TSX>): SgNode<TSX> | null {

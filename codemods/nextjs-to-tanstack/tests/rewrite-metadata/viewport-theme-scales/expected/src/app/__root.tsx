@@ -4,6 +4,7 @@ import appCss from "./globals.css?url";
 export const Route = createRootRoute({
     head: () => ({
       meta: [{ name: "viewport", content: "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no" }, { name: "theme-color", content: "white", media: "(prefers-color-scheme: light)" }, { name: "theme-color", content: "black", media: "(prefers-color-scheme: dark)" }],
+      links: [{ rel: "stylesheet", href: appCss }],
     }),
   component: RootLayout,
 });

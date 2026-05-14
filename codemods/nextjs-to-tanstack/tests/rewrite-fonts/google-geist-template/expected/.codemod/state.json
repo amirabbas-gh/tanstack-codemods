@@ -4,13 +4,19 @@
       "importSource": "next/font/google",
       "family": "Geist",
       "packageKey": "geist",
-      "variable": "--font-geist-sans"
+      "variable": "--font-geist-sans",
+      "googleSubsets": [
+        "latin"
+      ]
     },
     {
       "importSource": "next/font/google",
       "family": "Geist_Mono",
       "packageKey": "geist-mono",
-      "variable": "--font-geist-mono"
+      "variable": "--font-geist-mono",
+      "googleSubsets": [
+        "latin"
+      ]
     }
   ]
 }

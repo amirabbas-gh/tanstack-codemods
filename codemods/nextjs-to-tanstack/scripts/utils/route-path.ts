@@ -4,6 +4,7 @@
  * Rules (per the official migration guide):
  *   src/app/page.tsx                        → src/app/index.tsx             "/"
  *   src/app/posts/page.tsx                  → src/app/posts.tsx             "/posts"
+ *   src/app/posts/page.tsx (sibling routes) → src/app/posts/index.tsx       "/posts"
  *   src/app/posts/[slug]/page.tsx           → src/app/posts/$slug.tsx       "/posts/$slug"
  *   src/app/posts/[...slug]/page.tsx        → src/app/posts/$.tsx           "/posts/$"
  *   src/app/prefix/[[...slug]]/page.tsx     → src/app/prefix/$.tsx + sibling index.tsx that redirects empty splat "/prefix/$"
@@ -14,12 +15,18 @@
  * Pages Router (same TanStack `src/app` targets):
  *   src/pages/index.tsx                     → src/app/index.tsx             "/"
  *   src/pages/about.tsx                     → src/app/about.tsx             "/about"
- *   src/pages/blog/index.tsx              → src/app/blog.tsx              "/blog"
+ *   src/pages/blog/index.tsx (no siblings)   → src/app/blog.tsx           "/blog"
+ *   src/pages/blog/index.tsx (sibling routes) → src/app/blog/index.tsx    "/blog"
  *   src/pages/blog/[slug].tsx             → src/app/blog/$slug.tsx        "/blog/$slug"
  *   src/pages/api/hello.ts                → src/app/api/hello.ts          "/api/hello"
  *
- * Everything operates on POSIX-style paths. No filesystem access.
+ * Everything operates on POSIX-style paths. When `computeRoutePath` is given the
+ * absolute path to the source file, sibling route files under the same segment are
+ * detected on disk so `page.tsx` maps to a folder `index.tsx` instead of a colliding flat `segment.tsx`.
  */
+
+import { readdirSync, statSync } from "fs";
+import { basename, dirname, join } from "path";
 
 export type NextFileKind = "layout" | "page" | "route" | "other";
 
@@ -144,6 +151,52 @@ const translateSegment = (seg: string): SegmentTranslation => {
   return { text: seg, dynamic: null, catchAll: false, optionalCatchAll: false, group: false };
 };
 
+const PAGE_FILE = /^page\.(m|c)?(t|j)sx?$/i;
+const LAYOUT_FILE = /^layout\.(m|c)?(t|j)sx?$/i;
+const ROUTE_HANDLER = /^route\.(m|c)?(t|j)sx?$/i;
+const COLLOCATED_ROUTE_MODULE =
+  /^(loading|error|not-found|template|default|forbidden|unauthorized)\.(m|c)?(t|j)sx?$/i;
+
+/**
+ * True when the folder containing this page module has other routable entries, so
+ * TanStack should use `segment/index.tsx` instead of `segment.tsx`.
+ */
+function pageSourceDirHasTanStackRouteSiblings(pageSourceFileAbsolutePath: string): boolean {
+  const dir = dirname(pageSourceFileAbsolutePath);
+  const selfName = basename(pageSourceFileAbsolutePath);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    if (name === "." || name === "..") continue;
+    if (name.startsWith(".")) continue;
+    if (name === selfName) continue;
+
+    const full = join(dir, name);
+    let st;
+    try {
+      st = statSync(full);
+    } catch {
+      continue;
+    }
+
+    if (st.isDirectory()) {
+      return true;
+    }
+    if (PAGE_FILE.test(name) || LAYOUT_FILE.test(name)) continue;
+    if (ROUTE_HANDLER.test(name) || COLLOCATED_ROUTE_MODULE.test(name)) {
+      return true;
+    }
+    if (/\.(m|c)?tsx$/i.test(name) || /\.(m|c)?jsx$/i.test(name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Map `loading.tsx` / `error.tsx` / `not-found.tsx` to TanStack Start route
  * module files (`-pending.tsx`, `-error.tsx`, `-not-found.tsx`) while keeping the
@@ -214,14 +267,17 @@ export function computeSpecialRouteFileTransform(relativePath: string): SpecialR
  * conversion is not supported (e.g. parallel/intercepting routes like
  * `@modal/` or `(.)foo`).
  */
-export function computeRoutePath(relativePath: string): RoutePathResult | null {
+export function computeRoutePath(
+  relativePath: string,
+  pageSourceAbsPath?: string,
+): RoutePathResult | null {
   const appSplit = stripAppPrefix(relativePath);
   if (appSplit) {
-    return computeAppRouterRoutePath(relativePath, appSplit);
+    return computeAppRouterRoutePath(relativePath, appSplit, pageSourceAbsPath);
   }
   const pagesSplit = stripPagesPrefix(relativePath);
   if (pagesSplit) {
-    return computePagesRouterRoutePath(pagesSplit);
+    return computePagesRouterRoutePath(pagesSplit, pageSourceAbsPath);
   }
   return null;
 }
@@ -229,6 +285,7 @@ export function computeRoutePath(relativePath: string): RoutePathResult | null {
 function computeAppRouterRoutePath(
   _relativePath: string,
   split: { head: string; rest: string[] },
+  pageSourceAbsPath?: string,
 ): RoutePathResult | null {
   const { head, rest } = split;
 
@@ -298,13 +355,25 @@ function computeAppRouterRoutePath(
     const newDir = parentDir.length === 0 ? head : `${head}/${parentDir.join("/")}`;
     const routeDir = parentDir.length === 0 ? "" : `/${parentDir.join("/")}`;
     const splatRoutePath = `${routeDir}/${leaf}`;
-    const pageResult: RoutePathResult = {
-      newPath: `${newDir}/${leaf}${ext}`,
-      routePath: splatRoutePath,
-      kind,
-      wasCatchAll,
-      dynamicSegmentName: dynamicName,
-    };
+    const useFolderIndex =
+      pageSourceAbsPath !== undefined &&
+      pageSourceAbsPath.length > 0 &&
+      pageSourceDirHasTanStackRouteSiblings(pageSourceAbsPath);
+    const pageResult: RoutePathResult = useFolderIndex
+      ? {
+          newPath: `${head}/${translated.join("/")}/index${ext}`,
+          routePath: splatRoutePath,
+          kind,
+          wasCatchAll,
+          dynamicSegmentName: dynamicName,
+        }
+      : {
+          newPath: `${newDir}/${leaf}${ext}`,
+          routePath: splatRoutePath,
+          kind,
+          wasCatchAll,
+          dynamicSegmentName: dynamicName,
+        };
     if (hasOptionalCatchAll && parentDir.length > 0) {
       pageResult.optionalCatchAllRedirect = {
         indexNewPath: `${newDir}/index${ext}`,
@@ -364,10 +433,13 @@ function computeAppRouterApiLeafModule(
 /**
  * Map `src/pages/**` or `pages/**` to the same `app` tree used by App Router output.
  */
-function computePagesRouterRoutePath(split: {
-  head: string;
-  rest: string[];
-}): RoutePathResult | null {
+function computePagesRouterRoutePath(
+  split: {
+    head: string;
+    rest: string[];
+  },
+  pageSourceAbsPath?: string,
+): RoutePathResult | null {
   const { head, rest } = split;
   if (rest.length === 0) return null;
 
@@ -453,13 +525,25 @@ function computePagesRouterRoutePath(split: {
     const newDir = parentDir.length === 0 ? targetHead : `${targetHead}/${parentDir.join("/")}`;
     const routeDir = parentDir.length === 0 ? "" : `/${parentDir.join("/")}`;
     const splatRoutePath = `${routeDir}/${leaf}`;
-    const pageResult: RoutePathResult = {
-      newPath: `${newDir}/${leaf}${ext}`,
-      routePath: splatRoutePath,
-      kind: "page",
-      wasCatchAll,
-      dynamicSegmentName: dynamicName,
-    };
+    const useFolderIndex =
+      pageSourceAbsPath !== undefined &&
+      pageSourceAbsPath.length > 0 &&
+      pageSourceDirHasTanStackRouteSiblings(pageSourceAbsPath);
+    const pageResult: RoutePathResult = useFolderIndex
+      ? {
+          newPath: `${targetHead}/${translated.join("/")}/index${ext}`,
+          routePath: splatRoutePath,
+          kind: "page",
+          wasCatchAll,
+          dynamicSegmentName: dynamicName,
+        }
+      : {
+          newPath: `${newDir}/${leaf}${ext}`,
+          routePath: splatRoutePath,
+          kind: "page",
+          wasCatchAll,
+          dynamicSegmentName: dynamicName,
+        };
     if (hasOptionalCatchAll && parentDir.length > 0) {
       pageResult.optionalCatchAllRedirect = {
         indexNewPath: `${newDir}/index${ext}`,

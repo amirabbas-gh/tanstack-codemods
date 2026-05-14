@@ -211,7 +211,7 @@ export function buildMigrationRunSummarySection(params: {
     lines.push("");
   }
 
-  lines.push("### R10 — async route components (`// TODO: … Route.loader …` markers)");
+  lines.push("### R10 — async route components (loader migration + `// TODO: … Route.loader …` when needed)");
   lines.push("");
   if (r10 && r10.todoMarkersAdded > 0) {
     lines.push(`- **TODO markers inserted:** ${r10.todoMarkersAdded}`);

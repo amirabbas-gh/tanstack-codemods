@@ -22,7 +22,7 @@
 
 import type { Codemod, Edit, SgNode } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
-import { addImport, getImport, removeImport } from "../utils/imports.ts";
+import { addImport, getImport, removeImport, tanstackRouterNamedImportCommaFixEdits } from "../utils/imports.ts";
 
 const NEXT_LINK = "next/link";
 const NEXT_IMAGE = "next/image";
@@ -45,6 +45,8 @@ const codemod: Codemod<TSX> = async (root) => {
   if (imageImport && !imageImport.isNamespace) {
     edits.push(...rewriteImage(rootNode, imageImport.alias));
   }
+
+  edits.push(...tanstackRouterNamedImportCommaFixEdits(rootNode));
 
   if (edits.length === 0) return null;
   return rootNode.commitEdits(edits);

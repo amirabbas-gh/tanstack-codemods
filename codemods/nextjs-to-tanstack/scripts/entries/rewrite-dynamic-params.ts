@@ -2,7 +2,7 @@
  * R3 — Rewrite Next.js dynamic route parameter destructures to TanStack
  * Route hooks.
  *
- * Runs on files already renamed by R2 (`src/app/**\/*.tsx`, minus
+ * Runs on files already renamed by R2 (`src/app/**` / `*.tsx`, minus
  * `__root.tsx`). Scopes itself to files whose basename or path contains a
  * `$`-prefixed segment (i.e. is a dynamic or catch-all route); static pages
  * are silent no-ops.
@@ -21,6 +21,8 @@
  * For catch-all files (`$.tsx`), the destructured key is rewritten to
  * `_splat` — only when the original Next code used a single identifier. A
  * non-trivial destructure emits a short migration reminder.
+ *
+ * TanStack reference: splat / catch-all — https://tanstack.com/router/latest/docs/framework/react/routing/routing-concepts#splat--catch-all-routes
  */
 
 import type { Codemod, Edit, SgNode } from "codemod:ast-grep";
@@ -72,6 +74,7 @@ const codemod: Codemod<TSX> = async (root) => {
       kind,
       isCatchAll,
       rootNode,
+      source,
     );
     edits.push(...awaitEdits);
     removedAwaits += countAwaitsOf(pageFn, varName);
@@ -242,6 +245,7 @@ function rewriteAwaitStatements(
   kind: "params" | "searchParams",
   isCatchAll: boolean,
   rootNode: SgNode<TSX>,
+  source: string,
 ): Edit[] {
   const edits: Edit[] = [];
   const handledDeclaratorAwaitIds = new Set<number>();
@@ -275,6 +279,9 @@ function rewriteAwaitStatements(
           edits.push(pattern.replace("{ _splat }"));
           if (oldKey && oldKey !== "_splat") {
             edits.push(...rewriteCatchAllJoinedParamRefs(fn, oldKey));
+            if (needsCatchAllArrayAliasAfterJoinRewrite(fn, oldKey, decl)) {
+              edits.push(...insertCatchAllArrayAliasAfterDeclarator(decl, oldKey, source));
+            }
           }
         } else {
           edits.push(
@@ -350,4 +357,105 @@ function rewriteCatchAllJoinedParamRefs(pageFn: SgNode<TSX>, oldName: string): E
     edits.push(call.replace("_splat"));
   }
   return edits;
+}
+
+/**
+ * Next `params.slug` for `[...slug]` is `string[]`. TanStack exposes the splat
+ * as `_splat` string — reintroduce the old binding as segment array when the
+ * component still references it (e.g. `slug.map`, `slug.length`).
+ */
+function needsCatchAllArrayAliasAfterJoinRewrite(
+  pageFn: SgNode<TSX>,
+  oldKey: string,
+  decl: SgNode<TSX>,
+): boolean {
+  for (const id of pageFn.findAll({
+    rule: { kind: "identifier", regex: `^${escapeRxIdent(oldKey)}$` },
+  })) {
+    if (isIdentifierInCatchAllDestructuringPattern(decl, id)) continue;
+    if (isTypeOnlyIdentifierContext(id)) continue;
+    if (isOldKeyOnlyUsedAsJoinReceiver(id)) continue;
+    return true;
+  }
+  return false;
+}
+
+function escapeRxIdent(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isIdentifierInCatchAllDestructuringPattern(
+  decl: SgNode<TSX>,
+  id: SgNode<TSX>,
+): boolean {
+  const pat = decl.field("name");
+  if (!pat || pat.kind() !== "object_pattern") return false;
+  let cur: SgNode<TSX> | null = id.parent();
+  while (cur) {
+    if (cur.id() === pat.id()) return true;
+    cur = cur.parent();
+  }
+  return false;
+}
+
+function isTypeOnlyIdentifierContext(id: SgNode<TSX>): boolean {
+  let p: SgNode<TSX> | null = id.parent();
+  while (p) {
+    const k = p.kind();
+    if (
+      k === "type_annotation" ||
+      k === "type_arguments" ||
+      k === "type_parameter_declaration" ||
+      k === "opting_type_annotation" ||
+      k === "asserts_clause" ||
+      k === "property_signature" ||
+      k === "index_signature" ||
+      k === "type_predicate"
+    ) {
+      return true;
+    }
+    p = p.parent();
+  }
+  return false;
+}
+
+/** True when `id` is the receiver of `<oldKey>.join(...)` (rewritten to `_splat` elsewhere). */
+function isOldKeyOnlyUsedAsJoinReceiver(id: SgNode<TSX>): boolean {
+  const p = id.parent();
+  if (p?.kind() !== "member_expression") return false;
+  if (p.field("object")?.id() !== id.id()) return false;
+  if (p.field("property")?.text() !== "join") return false;
+  const call = p.parent();
+  return call?.kind() === "call_expression" && call.field("function")?.id() === p.id();
+}
+
+function insertCatchAllArrayAliasAfterDeclarator(
+  decl: SgNode<TSX>,
+  oldKey: string,
+  source: string,
+): Edit[] {
+  let stmt: SgNode<TSX> | null = decl.parent();
+  while (
+    stmt &&
+    stmt.kind() !== "lexical_declaration" &&
+    stmt.kind() !== "variable_declaration"
+  ) {
+    stmt = stmt.parent();
+  }
+  if (!stmt) return [];
+  const indent = inferIndentAfterNewline(source, stmt.range().start.index);
+  const insert = `\n${indent}const ${oldKey} = _splat.split("/").filter(Boolean);`;
+  return [{ startPos: stmt.range().end.index, endPos: stmt.range().end.index, insertedText: insert }];
+}
+
+function inferIndentAfterNewline(source: string, stmtStart: number): string {
+  let lineStart = stmtStart;
+  while (lineStart > 0) {
+    const c = source[lineStart - 1];
+    if (c === "\n" || c === "\r") break;
+    lineStart--;
+  }
+  const prefix = source.slice(lineStart, stmtStart);
+  const m = /^(\s*)/.exec(prefix);
+  return m?.[1] && m[1].length > 0 ? m[1] : "  ";
 }

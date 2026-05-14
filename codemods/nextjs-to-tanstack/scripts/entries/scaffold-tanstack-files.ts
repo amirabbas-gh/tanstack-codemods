@@ -76,6 +76,9 @@ import type { AnyRoute } from '@tanstack/react-router'
 export const routeTree = null as unknown as AnyRoute
 `;
 
+/** R1 defaults to \`./globals.css?url\` when the root layout had no CSS import — ensure the file exists. */
+const DEFAULT_GLOBALS_CSS = `@import "tailwindcss";\n`;
+
 const VITE_CONFIG_SRC_APP = `import { defineConfig } from 'vite'
 import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 import viteReact from '@vitejs/plugin-react'
@@ -167,6 +170,11 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
     ? join(repoRoot, "src", "query-client.ts")
     : join(repoRoot, "query-client.ts");
   writeIfAbsent(queryClientPath, QUERY_CLIENT_SRC);
+
+  const globalsCssPath = useSrcApp
+    ? join(repoRoot, "src", "app", "globals.css")
+    : join(repoRoot, "app", "globals.css");
+  writeIfAbsent(globalsCssPath, DEFAULT_GLOBALS_CSS);
 
   const i18n = readNextI18nConfig(repoRoot);
   if (i18n) {

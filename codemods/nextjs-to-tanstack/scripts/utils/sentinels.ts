@@ -7,6 +7,7 @@
  */
 
 import type { Edit, SgNode, TypesMap } from "codemod:ast-grep";
+import { utf8ByteOffsetToUtf16Index } from "./js-string-utf8-offsets.ts";
 
 /** Public so entry scripts can build aligned single-line prefixes. */
 export const REVIEW_PREFIX = "// TODO: ";
@@ -31,8 +32,10 @@ export function insertTodoBefore<T extends TypesMap>(
   node: SgNode<T>,
   message: string,
   docUrl?: string,
+  /** Prefer ASCII (e.g. `" - "`) when edits must align with JS string indices in TSX. */
+  docJoiner = " — ",
 ): Edit {
-  const body = docUrl ? `${message} — ${docUrl}` : message;
+  const body = docUrl ? `${message}${docJoiner}${docUrl}` : message;
   return buildLeadingCommentEdit(node as unknown as AnyNode, `${TODO_PREFIX}${body}`);
 }
 
@@ -70,7 +73,8 @@ export function hasTodoSentinel<T extends TypesMap>(
 }
 
 function hasSentinel(source: string, node: AnyNode, prefix: string, needle?: string): boolean {
-  const lineStart = findLineStart(source, node.range().start.index);
+  const startU16 = utf8ByteOffsetToUtf16Index(source, node.range().start.index);
+  const lineStart = findLineStart(source, startU16);
   const precedingLines = source.slice(0, lineStart).split("\n").slice(-6);
   for (const line of precedingLines) {
     const trimmed = line.trim();
