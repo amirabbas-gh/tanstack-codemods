@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-// TODO: next/server Vitest shim (R4h-test): Replace with `Request`/`Response` when tests no longer mimic Next middleware — https://tanstack.com/start/latest/docs/framework/react/guide/server-routes
 type NextResponseInit = ResponseInit & { request?: { headers?: Headers } };
 
 function __nextResponseJson(body: unknown, init?: ResponseInit): Response {

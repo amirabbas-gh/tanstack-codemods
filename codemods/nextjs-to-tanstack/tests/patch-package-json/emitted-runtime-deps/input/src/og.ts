@@ -1,3 +1,4 @@
-import { ImageResponse } from "@vercel/og";
+import satori from "satori";
+import { Resvg } from "@resvg/resvg-js";
 
-export const response = new ImageResponse("ok");
+export const ready = typeof satori === "function" && typeof Resvg === "function";

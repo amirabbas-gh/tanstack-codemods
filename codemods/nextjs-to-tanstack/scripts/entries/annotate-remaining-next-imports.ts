@@ -116,15 +116,15 @@ function todoForNextSpecifier(from: string): { message: string; docUrl?: string 
   if (from === "next/server") {
     return {
       message:
-        "remaining `next/server` imports (`userAgent`, `after`, middleware-only `NextResponse` helpers, etc.) — complete the port to Web APIs and TanStack Start server routes",
+        "remaining `next/server` imports (middleware-only `NextResponse.next`, namespace imports, or exports without an automated rewrite) — complete the port to Web APIs and TanStack Start server routes",
       docUrl: serverRoutes,
     };
   }
   if (from === "next/og") {
     return {
       message:
-        "remaining `next/og` usage beyond the import rewrite — `@vercel/og` is added in package.json; align with Vercel OG runtime on Nitro/Vite",
-      docUrl: "https://vercel.com/docs/functions/og-image-generation",
+        "remaining `next/og` usage was not auto-ported — R4i rewrites `ImageResponse` + `next/og` imports when matched; finish manually with `satori` + `@resvg/resvg-js` if needed",
+      docUrl: "https://tanstack.com/start/latest/docs/framework/react/guide/server-routes",
     };
   }
   if (from === "next/cache") {

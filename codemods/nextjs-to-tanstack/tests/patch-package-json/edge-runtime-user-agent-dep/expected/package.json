@@ -1,0 +1,22 @@
+{
+  "name": "edge-ua-dep",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "@tanstack/react-query": "latest",
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-start": "latest",
+    "vite": "latest",
+    "@vitejs/plugin-react": "latest",
+    "nitro": "latest",
+    "@unpic/react": "latest",
+    "@edge-runtime/user-agent": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "latest",
+    "tailwindcss": "latest"
+  }
+}

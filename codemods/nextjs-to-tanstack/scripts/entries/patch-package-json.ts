@@ -21,8 +21,9 @@
  *     ensure TanStack Start deps (`@tanstack/react-router`, `@tanstack/react-start`,
  *     `vite`, `@vitejs/plugin-react`, `nitro`, `@unpic/react`) exist at `"latest"` unless
  *     already present with a different version.
- *     Also ensure optional runtime packages used by emitted rewrites (`@vercel/og`,
- *     `i18next`, `react-i18next`, `path-to-regexp`) are present.
+ *     Also ensure optional runtime packages used by emitted rewrites (`satori`,
+ *     `@resvg/resvg-js`, `i18next`, `react-i18next`, `path-to-regexp`,
+ *     `@edge-runtime/user-agent` when R4h rewrote `userAgent`) are present.
  *   - devDependencies: ensure `@tailwindcss/vite` and `tailwindcss` exist.
  *     For each **Google** sidecar font (`next/font/google`), add
  *     `@fontsource-variable/<packageKey>` at `"latest"`.
@@ -129,8 +130,12 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
     ensureDep(pkg, "dependencies", "i18next", "latest");
     ensureDep(pkg, "dependencies", "react-i18next", "latest");
   }
-  if (sourceTreeContains(targetDir, /\bfrom\s+["']@vercel\/og["']/)) {
-    ensureDep(pkg, "dependencies", "@vercel/og", "latest");
+  if (
+    sourceTreeContains(targetDir, /\bfrom\s+["']satori["']/) ||
+    sourceTreeContains(targetDir, /\bfrom\s+["']@resvg\/resvg-js["']/)
+  ) {
+    ensureDep(pkg, "dependencies", "satori", "latest");
+    ensureDep(pkg, "dependencies", "@resvg/resvg-js", "latest");
   }
   if (
     sourceTreeContains(
@@ -139,6 +144,9 @@ const codemod: Codemod<JSON_TYPES> = async (root) => {
     )
   ) {
     ensureDep(pkg, "dependencies", "path-to-regexp", "latest");
+  }
+  if (sourceTreeContains(targetDir, /\bfrom\s+["']@edge-runtime\/user-agent["']/)) {
+    ensureDep(pkg, "dependencies", "@edge-runtime/user-agent", "latest");
   }
 
   // Ensure Tailwind devDeps.

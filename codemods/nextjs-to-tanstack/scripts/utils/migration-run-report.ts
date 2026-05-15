@@ -180,7 +180,7 @@ export function buildMigrationRunSummarySection(params: {
   lines.push("## 4. Migration run summary");
   lines.push("");
   lines.push(
-    "Data from earlier workflow steps via `codemod:workflow` **state**: R10 / R10b totals and per-step reports (written with `acquireLock`, `setState`, `getState`), plus **metrics** (same atoms as in the CLI; see `useMetricAtom` in the R10 and R10b transforms).",
+    "From `codemod:workflow` **state**: R10 / R10b totals, per-step JSON (`acquireLock` / `setState` / `getState`), and CLI **metrics** (`useMetricAtom` in R10 / R10b).",
   );
   lines.push("");
   lines.push(`- **Package root (this manifest):** \`${packageRoot}\``);

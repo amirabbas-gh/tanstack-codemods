@@ -6,7 +6,11 @@
  * API routes under `app/api/` and the root layout `__root` are left unchanged.
  */
 
-import type { RoutePathResult, SpecialRouteFileResult } from "./route-path.ts";
+import type {
+  MetadataImageRouteResult,
+  RoutePathResult,
+  SpecialRouteFileResult,
+} from "./route-path.ts";
 
 export const OPTIONAL_LOCALE_DIR = "{-$locale}" as const;
 const OPTIONAL_LOCALE_PREFIX = `/${OPTIONAL_LOCALE_DIR}`;
@@ -88,6 +92,16 @@ export function applyOptionalLocaleToSpecialRouteFile(
   if (shouldSkipLocalePrefixForAppPath(r.newPath)) return r;
   return {
     ...r,
+    newPath: insertOptionalLocaleDirInAppPath(r.newPath),
+    routePath: prefixRouteIdWithOptionalLocale(r.routePath),
+  };
+}
+
+export function applyOptionalLocaleToMetadataImage(
+  r: MetadataImageRouteResult,
+): MetadataImageRouteResult {
+  if (shouldSkipLocalePrefixForAppPath(r.newPath)) return r;
+  return {
     newPath: insertOptionalLocaleDirInAppPath(r.newPath),
     routePath: prefixRouteIdWithOptionalLocale(r.routePath),
   };

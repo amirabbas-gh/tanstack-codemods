@@ -1,13 +1,17 @@
 /**
  * Migrates `next/cache` usages toward TanStack Query patterns:
- * - `revalidateTag(expr)` → `queryClient.invalidateQueries({ queryKey: [expr] })`
- * - `revalidatePath(pathExpr)` → same shape (paths as query roots; align keys to your app)
- * - `unstable_cache(fn, …)` → unwrap to `fn` (migrate TTL/`tags` via `useQuery` + `staleTime` manually)
+ * - `revalidateTag(expr)` → `queryClient.invalidateQueries({ queryKey: ['next-cache', 'tag', expr] })`
+ * - `revalidatePath(path, type?)` → `… queryKey: ['next-cache', 'path', path]` or includes `type` when present
+ * - `unstable_cache` / `cache(fn, …)` → unwrap to `fn`; when the call is \`export const name = …\`,
+ *   also emits \`export const nameQueryOptions = { queryKey, queryFn: name, staleTime? }\` for TanStack Query.
  * - `unstable_noStore()` → removed (`staleTime: 0` per-query replaces it)
  *
  * Replaces `next/cache` import lines: adds `queryClient` from a relative path to the shared
  * singleton written by `scaffold-tanstack-files` (`src/query-client.ts` or `query-client.ts`).
- * Inserts one \`// TODO:\` banner per file (unless \`next/cache migration (R4e)\` is already present); see R4e in \`TANSTACK_MIGRATION_NEXT_STEPS.md\`.
+ * Inserts one \`// TODO:\` banner per file (unless \`next/cache migration (R4e)\` is already present).
+ * Banner is **short** when the file only unwraps \`cache\`/\`unstable_cache\` or strips \`unstable_noStore\`;
+ * **long** when it emits \`invalidateQueries\`. Legacy \`unstable_cache\` metadata may still appear in an end-of-line
+ * \`// TODO\` when the call is not a simple \`export const x = …\` binding.
  */
 
 import type { Codemod, Edit, SgNode } from "codemod:ast-grep";
@@ -21,8 +25,14 @@ const NEXT_CACHE = "next/cache";
 
 const R4E_TODO_SENTINEL = "next/cache migration (R4e)";
 const R4E_TODO_DOC = "https://tanstack.com/query/latest/docs/framework/react/guides/query-invalidation";
+const R4E_CACHING_DOC = "https://tanstack.com/query/latest/docs/framework/react/guides/caching";
 
-type Builtin = "revalidateTag" | "revalidatePath" | "unstable_cache" | "unstable_noStore";
+type Builtin =
+  | "revalidateTag"
+  | "revalidatePath"
+  | "unstable_cache"
+  | "cache"
+  | "unstable_noStore";
 
 type ImportSpecPiece = {
   exported: string;
@@ -64,7 +74,8 @@ const codemod: Codemod<TSX> = async (root) => {
     if (firstArgumentListExpr(call)) invalidateCount++;
   }
 
-  const nextTodoLead = todoLeadAppender(source);
+  const hasInvalidation = invalidateCount > 0;
+  const nextTodoLead = todoLeadAppender(source, hasInvalidation);
 
   for (const stmt of nextCacheImports) {
     const plan = planNextCacheImportRewrite(
@@ -103,11 +114,33 @@ const codemod: Codemod<TSX> = async (root) => {
       continue;
     }
 
-    if (builtin === "unstable_cache") {
+    if (builtin === "unstable_cache" || builtin === "cache") {
       const fst = firstArgumentListExpr(call);
-      if (fst) {
-        edits.push(call.replace(`${nextTodoLead()}${fst.text()}`));
-      }
+      if (!fst) continue;
+      const args = extractCallArgs(call);
+      const bindName = variableDeclaratorIdentForRhs(call);
+      const tail =
+        builtin === "unstable_cache" && !bindName ? unstableCacheTrailingHint(args) : "";
+      edits.push(call.replace(`${nextTodoLead()}${fst.text()}${tail}`));
+      const qoInsert = queryOptionsInsertAfterExport(source, call, bindName, args, builtin);
+      if (qoInsert) edits.push(qoInsert);
+      continue;
+    }
+
+    if (builtin === "revalidatePath") {
+      const args = extractCallArgs(call);
+      const path = args[0];
+      const typ = args[1];
+      if (!path) continue;
+      const keyInner =
+        typ != null
+          ? `'next-cache', 'path', ${path.text()}, ${typ.text()}`
+          : `'next-cache', 'path', ${path.text()}`;
+      edits.push(
+        call.replace(
+          `${nextTodoLead()}queryClient.invalidateQueries({ queryKey: [${keyInner}] })`,
+        ),
+      );
       continue;
     }
 
@@ -115,7 +148,9 @@ const codemod: Codemod<TSX> = async (root) => {
     if (!arg) continue;
 
     edits.push(
-      call.replace(`${nextTodoLead()}queryClient.invalidateQueries({ queryKey: [${arg.text()}] })`),
+      call.replace(
+        `${nextTodoLead()}queryClient.invalidateQueries({ queryKey: ['next-cache', 'tag', ${arg.text()}] })`,
+      ),
     );
   }
 
@@ -128,17 +163,121 @@ const codemod: Codemod<TSX> = async (root) => {
 export default codemod;
 
 /** One migration banner appended to the first structural edit (imports or call replace). */
-function todoLeadAppender(source: string): () => string {
+function todoLeadAppender(source: string, hasInvalidation: boolean): () => string {
   if (source.includes(R4E_TODO_SENTINEL)) {
     return (): string => "";
   }
   let used = false;
-  const banner = `\n${TODO_PREFIX}${R4E_TODO_SENTINEL}: wire \`queryClient\` through QueryClientProvider or your app root; every \`invalidateQueries({ queryKey })\` must match a real \`useQuery\` key; former \`unstable_cache\` TTL/tags → \`staleTime\` / gcTime / loaders; if you relied on \`unstable_noStore\`, use \`staleTime: 0\` (or refetch) for that data — ${R4E_TODO_DOC}\n`;
+  const bannerInvalidate = `\n${TODO_PREFIX}${R4E_TODO_SENTINEL}: wire \`queryClient\` through QueryClientProvider or your app root; align \`useQuery({ queryKey })\` with \`['next-cache', 'tag', …]\` / \`['next-cache', 'path', …]\` from \`revalidateTag\` / \`revalidatePath\`; former \`unstable_cache\` / \`cache\` TTL/tags → \`staleTime\` / \`gcTime\` / loaders; if you relied on \`unstable_noStore\`, use \`staleTime: 0\` (or refetch) for that data — ${R4E_TODO_DOC}\n`;
+  const bannerCacheOnly = `\n${TODO_PREFIX}${R4E_TODO_SENTINEL}: unwrap + optional \`*QueryOptions\` for \`useQuery\`/\`ensureQueryData\`; align with \`invalidateQueries\` / route loaders — ${R4E_CACHING_DOC} · ${R4E_TODO_DOC}\n`;
+  const banner = hasInvalidation ? bannerInvalidate : bannerCacheOnly;
   return (): string => {
     if (used) return "";
     used = true;
     return banner;
   };
+}
+
+function queryOptionsInsertAfterExport(
+  source: string,
+  call: SgNode<TSX>,
+  bindName: string | null,
+  args: SgNode<TSX>[],
+  builtin: "cache" | "unstable_cache",
+): Edit | null {
+  if (!bindName) return null;
+  const optName = `${bindName}QueryOptions`;
+  if (new RegExp(`\\b${escapeReg(optName)}\\b`).test(source)) return null;
+
+  const container = ascendToKind(call, "export_statement") ?? ascendToKind(call, "lexical_declaration");
+  if (!container) return null;
+
+  const queryKeyTs = buildQueryKeyTypeScript(bindName, args[1], builtin);
+  const st = staleTimeMsFromUnstableOpts(args[2]);
+  const staleLine = st != null ? `  staleTime: ${st},\n` : "";
+
+  const block = `export const ${optName} = {
+  queryKey: ${queryKeyTs},
+  queryFn: ${bindName},
+${staleLine}};`;
+
+  const end = container.range().end.index;
+  const nl = source.slice(end, end + 2) === "\r\n" ? "\r\n" : "\n";
+  return { startPos: end, endPos: end, insertedText: `${nl}${nl}${block}` };
+}
+
+function variableDeclaratorIdentForRhs(call: SgNode<TSX>): string | null {
+  const p = call.parent();
+  if (p?.kind() !== "variable_declarator") return null;
+  const val = p.field("value");
+  if (!val || val.id() !== call.id()) return null;
+  const name = p.field("name");
+  if (!name || name.kind() !== "identifier") return null;
+  return name.text();
+}
+
+function ascendToKind(node: SgNode<TSX>, kind: string): SgNode<TSX> | null {
+  let cur: SgNode<TSX> | null = node.parent();
+  while (cur) {
+    if (cur.kind() === kind) return cur;
+    cur = cur.parent();
+  }
+  return null;
+}
+
+function buildQueryKeyTypeScript(
+  bindName: string,
+  keyArg: SgNode<TSX> | undefined,
+  builtin: "cache" | "unstable_cache",
+): string {
+  if (builtin === "unstable_cache" && keyArg) {
+    const strings = stringLiteralsFromArrayExpression(keyArg);
+    if (strings !== null && strings.length > 0) {
+      return `['next-cache', ${strings.join(", ")}] as const`;
+    }
+  }
+  return `['next-cache', '${bindName}'] as const`;
+}
+
+function stringLiteralsFromArrayExpression(node: SgNode<TSX>): string[] | null {
+  const k = node.kind();
+  if (k !== "array_expression" && k !== "array") return null;
+  const out: string[] = [];
+  for (const ch of node.children()) {
+    const ck = ch.kind();
+    if (ck === "[" || ck === "]" || ck === ",") continue;
+    if (ck !== "string") return null;
+    out.push(ch.text());
+  }
+  return out.length > 0 ? out : null;
+}
+
+function staleTimeMsFromUnstableOpts(opts: SgNode<TSX> | undefined): number | null {
+  if (!opts) return null;
+  const rev = /revalidate\s*:\s*(\d+)/.exec(opts.text());
+  if (!rev) return null;
+  const sec = Number(rev[1]);
+  return Number.isNaN(sec) ? null : sec * 1000;
+}
+
+/**
+ * Inline hint when `unstable_cache` is not a simple `export const name = …` binding.
+ */
+function unstableCacheTrailingHint(args: SgNode<TSX>[]): string {
+  if (args.length <= 1) return "";
+  const keyText = args[1]?.text().trim() ?? "";
+  const optsText = args[2]?.text().trim() ?? "";
+  const parts: string[] = [];
+  if (keyText) parts.push(`unstable_cache keys ${keyText}`);
+  const rev = /revalidate\s*:\s*(\d+)/.exec(optsText);
+  if (rev) {
+    const sec = Number(rev[1]);
+    if (!Number.isNaN(sec)) parts.push(`revalidate ${sec}s → staleTime: ${sec * 1000}`);
+  }
+  const tags = /tags\s*:\s*\[([^\]]*)\]/.exec(optsText);
+  if (tags?.[1]) parts.push(`tags [${tags[1].trim()}]`);
+  if (parts.length === 0) return "";
+  return ` ${TODO_PREFIX}${R4E_TODO_SENTINEL}: ${parts.join("; ")}`;
 }
 
 function queryClientSpecifierForFile(pkgRoot: string, fileAbs: string): string | null {
@@ -210,6 +349,7 @@ function builtinForExported(name: string): Builtin | null {
     name === "revalidateTag" ||
     name === "revalidatePath" ||
     name === "unstable_cache" ||
+    name === "cache" ||
     name === "unstable_noStore"
   ) {
     return name;

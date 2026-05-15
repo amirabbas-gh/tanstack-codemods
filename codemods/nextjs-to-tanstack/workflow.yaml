@@ -329,11 +329,11 @@ nodes:
           exclude: *shared-excludes
 
   - id: rewrite-next-cache
-    name: R4e — next/cache → TanStack Query (invalidateQueries / unwrap unstable_cache)
+    name: R4e — next/cache → TanStack Query (conventional query keys + unwrap unstable_cache/cache)
     type: automatic
     depends_on: [rewrite-next-i18next-imports]
     steps:
-      - name: revalidateTag · revalidatePath → queryClient.invalidateQueries; strip unstable_noStore
+      - name: revalidateTag · revalidatePath → queryClient.invalidateQueries (['next-cache', …]); unwrap unstable_cache/cache; strip unstable_noStore
         js-ast-grep:
           js_file: scripts/entries/rewrite-next-cache.ts
           language: tsx
@@ -357,7 +357,7 @@ nodes:
     type: automatic
     depends_on: [rewrite-next-headers]
     steps:
-      - name: Trim next/server imports; rename identifiers (skip next/rewrite middleware-only)
+      - name: next/server → Fetch + edge UA + next/og ImageResponse + after/connection shims + type stubs (skip NextResponse.next / namespace / aliases)
         js-ast-grep:
           js_file: scripts/entries/rewrite-next-server.ts
           language: tsx
@@ -377,21 +377,41 @@ nodes:
           exclude: *shared-excludes
 
   - id: rewrite-next-og
-    name: R4i — next/og → @vercel/og
+    name: R4i — next/og → satori + @resvg/resvg-js + Response
     type: automatic
     depends_on: [rewrite-next-server-vitest]
     steps:
-      - name: Point OG imports at @vercel/og (package added in R11)
+      - name: Replace ImageResponse with satori + Resvg PNG pipeline (Start/Vite)
         js-ast-grep:
           js_file: scripts/entries/rewrite-next-og.ts
           language: tsx
           include: *cross-cutting-ts
           exclude: *shared-excludes
 
+  - id: migrate-next-metadata-images
+    name: R4i-bis — opengraph-image / twitter-image → TanStack server GET routes
+    type: automatic
+    depends_on: [rewrite-next-og]
+    steps:
+      - name: Move metadata image modules to $segments + createFileRoute GET handlers
+        js-ast-grep:
+          js_file: scripts/entries/migrate-next-metadata-images.ts
+          language: tsx
+          include:
+            - "**/src/app/**/opengraph-image.tsx"
+            - "**/src/app/**/opengraph-image.ts"
+            - "**/src/app/**/twitter-image.tsx"
+            - "**/src/app/**/twitter-image.ts"
+            - "**/app/**/opengraph-image.tsx"
+            - "**/app/**/opengraph-image.ts"
+            - "**/app/**/twitter-image.tsx"
+            - "**/app/**/twitter-image.ts"
+          exclude: *shared-excludes
+
   - id: annotate-async-pages
     name: R10 — Move safe top-level await into Route.loader + useLoaderData (TODO otherwise)
     type: automatic
-    depends_on: [rewrite-next-og]
+    depends_on: [migrate-next-metadata-images]
     steps:
       - name: Extract sequential top-level await into createFileRoute.loader (or TODO when unsafe)
         js-ast-grep:

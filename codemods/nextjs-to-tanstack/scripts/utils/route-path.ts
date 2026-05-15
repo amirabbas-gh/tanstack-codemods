@@ -117,6 +117,12 @@ export function classifySpecialRouteFileBasename(fileName: string | undefined): 
   return null;
 }
 
+/** Next `opengraph-image` / `twitter-image` → TanStack server route path + on-disk path. */
+export interface MetadataImageRouteResult {
+  newPath: string;
+  routePath: string;
+}
+
 type SegmentTranslation = {
   text: string | null;
   dynamic: string | null;
@@ -150,6 +156,52 @@ const translateSegment = (seg: string): SegmentTranslation => {
 
   return { text: seg, dynamic: null, catchAll: false, optionalCatchAll: false, group: false };
 };
+
+const NEXT_METADATA_IMAGE_FILE =
+  /^(opengraph-image|twitter-image)\.(m|c)?(t|j)sx?$/i;
+
+/**
+ * Map `app/.../opengraph-image.tsx` (or `twitter-image`) to `app/.../opengraph.tsx`
+ * (or `twitter.tsx`) with `$param` segments. Route id ends with `/opengraph` or `/twitter`.
+ */
+export function computeMetadataImageTransform(
+  relativePath: string,
+): MetadataImageRouteResult | null {
+  const appSplit = stripAppPrefix(relativePath);
+  if (!appSplit) return null;
+  const { head, rest } = appSplit;
+  const fileName = rest.at(-1);
+  if (!fileName || !NEXT_METADATA_IMAGE_FILE.test(fileName)) return null;
+
+  const dirSegs = rest.slice(0, -1);
+  for (const seg of dirSegs) {
+    if (seg.startsWith("@")) return null;
+    if (/^\(\.{1,3}\)/.test(seg)) return null;
+  }
+  if (dirSegs.length > 0 && dirSegs[0] === "api") return null;
+
+  const m = NEXT_METADATA_IMAGE_FILE.exec(fileName);
+  const kind = (m?.[1] ?? "").toLowerCase();
+  const ext = fileName.slice(fileName.indexOf("."));
+  const routeLeaf = kind === "opengraph-image" ? "opengraph" : "twitter";
+  const outLeaf = `${routeLeaf}${ext}`;
+
+  const translated: string[] = [];
+  for (const seg of dirSegs) {
+    const t = translateSegment(seg);
+    if (t.group) continue;
+    if (t.text === null) return null;
+    translated.push(t.text);
+  }
+
+  const routePath =
+    translated.length === 0
+      ? `/${routeLeaf}`
+      : `/${translated.join("/")}/${routeLeaf}`;
+  const dirPart = translated.length ? `${translated.join("/")}/` : "";
+  const newPath = `${head}/${dirPart}${outLeaf}`;
+  return { newPath, routePath };
+}
 
 const PAGE_FILE = /^page\.(m|c)?(t|j)sx?$/i;
 const LAYOUT_FILE = /^layout\.(m|c)?(t|j)sx?$/i;

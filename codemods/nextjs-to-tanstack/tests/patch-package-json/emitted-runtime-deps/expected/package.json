@@ -14,7 +14,8 @@
     "@vitejs/plugin-react": "latest",
     "nitro": "latest",
     "@unpic/react": "latest",
-    "@vercel/og": "latest",
+    "satori": "latest",
+    "@resvg/resvg-js": "latest",
     "path-to-regexp": "latest"
   },
   "devDependencies": {

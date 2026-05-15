@@ -3,18 +3,14 @@
  * `NextResponse.rewrite`) are skipped by `rewrite-next-server.ts`. This step replaces
  * those imports with small Fetch-API shims so `next/server` can be dropped in tests.
  *
- * Strips `vi.mock("next/server", …)` factories when present. Adds one TODO (R4h-test).
+ * Strips `vi.mock("next/server", …)` factories when present. Injects local `Request`/`Response`-compatible shims.
  */
 
 import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import { getFilename, normalizePath } from "../utils/paths.ts";
-import { TODO_PREFIX } from "../utils/sentinels.ts";
-
-const R4H_TEST = "next/server Vitest shim (R4h-test)";
 
 const SHIM = `
-${TODO_PREFIX}${R4H_TEST}: Replace with \`Request\`/\`Response\` when tests no longer mimic Next middleware — https://tanstack.com/start/latest/docs/framework/react/guide/server-routes
 type NextResponseInit = ResponseInit & { request?: { headers?: Headers } };
 
 function __nextResponseJson(body: unknown, init?: ResponseInit): Response {

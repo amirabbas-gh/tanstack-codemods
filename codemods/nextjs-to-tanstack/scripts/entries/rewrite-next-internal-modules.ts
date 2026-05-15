@@ -8,7 +8,6 @@
  * - `next/image` residuals:
  *   - `import { getImageProps } from "next/image"` → local passthrough helper + TODO
  *   - `import type { ImageProps } from "next/image"` → `type ImageProps = React.ImgHTMLAttributes<HTMLImageElement>`
- * - `import { after } from "next/server"` → local `after()` shim + TODO
  */
 
 import type { Codemod } from "codemod:ast-grep";
@@ -101,12 +100,6 @@ const codemod: Codemod<TSX> = async (root) => {
       `${imageTodo}type ImageProps = React.ImgHTMLAttributes<HTMLImageElement>;\nfunction getImageProps<T extends Record<string, unknown>>(input: T): { props: T } {\n  return { props: input };\n}\n`,
     );
   }
-
-  const afterTodo = `${TODO_PREFIX}${R4DIST_SENTINEL}: next/server \`after\` shim — ensure background work semantics match your runtime\n`;
-  s = s.replace(
-    /^[ \t]*import\s*\{\s*after\s*\}\s*from\s*["']next\/server["']\s*;?\s*\r?\n/m,
-    `${afterTodo}const after = (cb: () => unknown) => {\n  void Promise.resolve().then(cb);\n};\n`,
-  );
 
   const nextErrorTodo = `${TODO_PREFIX}${R4DIST_SENTINEL}: \`next/error\` was replaced with a local fallback component; customize your global error UI\n`;
   const hadNextError = /from\s*["']next\/error["']/.test(s);
